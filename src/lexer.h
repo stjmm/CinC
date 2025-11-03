@@ -35,7 +35,10 @@ typedef enum {
 } token_type_e;
 
 typedef struct {
-
+    int line;
 } token_t;
+
+void lexer_init(const char *source);
+token_t lexer_scan_token(void);
 
 #endif

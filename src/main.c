@@ -96,15 +96,15 @@ int main(int argc, char **argv)
         }
     }
 
-    const char *input_file = read_file(config.file_path);
     const char *pre_file = "temp.i";
     const char *asm_file = "temp.s";
     const char *output_file = "temp.out";
 
-    preprocess(input_file, pre_file);
+    preprocess(config.file_path, pre_file);
 
     if (config.lex_only) {
         printf("Lexing only: %s\n", config.file_path);
+        exit(0);
         // lexing
     } else if (config.parse_only) {
         printf("Lexing and parsing: %s\n", config.file_path);
@@ -120,6 +120,4 @@ int main(int argc, char **argv)
         // lexing + parsing + codegen
         assemble_and_link(asm_file, output_file);
     }
-
-    free((void*)input_file);
 }
