@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "lexer.h"
+
 typedef struct {
     const char *file_path;
     bool lex_only;
@@ -102,10 +104,25 @@ int main(int argc, char **argv)
 
     preprocess(config.file_path, pre_file);
 
+    char *source_content = read_file(pre_file);
+
+    lexer_init(source_content);
+
     if (config.lex_only) {
-        printf("Lexing only: %s\n", config.file_path);
+        token_t token;
+
+        do {
+            token = lexer_scan_token();
+            print_token(token);
+
+            if (token.type == TOKEN_ERROR) {
+                free(source_content);
+                exit(1);
+            }
+        } while (token.type != TOKEN_EOF);
+
+        free(source_content);
         exit(0);
-        // lexing
     } else if (config.parse_only) {
         printf("Lexing and parsing: %s\n", config.file_path);
         // parser
@@ -120,4 +137,6 @@ int main(int argc, char **argv)
         // lexing + parsing + codegen
         assemble_and_link(asm_file, output_file);
     }
+
+    free(source_content);
 }
