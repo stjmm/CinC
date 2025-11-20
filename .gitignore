@@ -18,3 +18,5 @@ example/
 *.log
 *.trace
 *.stackdump
+
+writing-a-c-compiler-tests/
