@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "lexer.h"
+#include "debug.h"
 
 typedef struct {
     const char *file_path;
@@ -55,14 +56,14 @@ static void run_command(const char *cmd)
 
 static void preprocess(const char *input, const char *output)
 {
-    char cmd[64];
+    char cmd[2048];
     snprintf(cmd, sizeof(cmd), "gcc -E -P %s -o %s", input, output);
     run_command(cmd);
 }
 
 static void assemble_and_link(const char *asm_file, const char *output)
 {
-    char cmd[64];
+    char cmd[2048];
     snprintf(cmd, sizeof(cmd), "gcc %s -o %s", asm_file, output);
     run_command(cmd);
 }
@@ -113,15 +114,17 @@ int main(int argc, char **argv)
 
         do {
             token = lexer_scan_token();
-            print_token(token);
+            debug_print_token(token);
 
             if (token.type == TOKEN_ERROR) {
                 free(source_content);
+                remove("temp.i");
                 exit(1);
             }
         } while (token.type != TOKEN_EOF);
 
         free(source_content);
+        remove("temp.i");
         exit(0);
     } else if (config.parse_only) {
         printf("Lexing and parsing: %s\n", config.file_path);
@@ -138,5 +141,6 @@ int main(int argc, char **argv)
         assemble_and_link(asm_file, output_file);
     }
 
+    remove("temp.i");
     free(source_content);
 }
