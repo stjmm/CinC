@@ -39,5 +39,7 @@ typedef struct {
 
 void lexer_init(const char *source);
 token_t lexer_next_token(void);
+void lexer_print_token(token_type_e type);
+void lexer_print_all(const char *source);
 
 #endif
