@@ -1,0 +1,7 @@
+*.o
+*.obj
+
+build/
+bin/
+
+.cache/
