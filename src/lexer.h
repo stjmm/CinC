@@ -7,6 +7,8 @@
     X(TOKEN_RIGHT_PAREN) \
     X(TOKEN_LEFT_BRACE) \
     X(TOKEN_RIGHT_BRACE) \
+    X(TOKEN_LEFT_BRACKET) \
+    X(TOKEN_RIGHT_BRACKET) \
     X(TOKEN_SEMICOLON) \
     /* One or two char tokens */ \
     X(TOKEN_MINUS) \
@@ -35,11 +37,11 @@ typedef struct {
     const char *start;
     unsigned int length;
     unsigned int line;
+    unsigned int column;
 } token_t;
 
 void lexer_init(const char *source);
 token_t lexer_next_token(void);
 void lexer_print_token(token_type_e type);
-void lexer_print_all(const char *source);
 
 #endif

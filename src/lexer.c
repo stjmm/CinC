@@ -1,6 +1,5 @@
 #include <string.h>
 #include <stdbool.h>
-#include <stdio.h>
 
 #include "lexer.h"
 
@@ -8,6 +7,8 @@ typedef struct {
     const char *start;
     const char *current;
     unsigned int line;
+    unsigned int column;
+    unsigned int start_column;
 } lexer_t;
 
 static lexer_t lexer;
@@ -17,6 +18,7 @@ void lexer_init(const char *source)
     lexer.start = source;
     lexer.current = source;
     lexer.line = 1;
+    lexer.column = 1;
 }
 
 static bool is_at_end(void)
@@ -27,6 +29,7 @@ static bool is_at_end(void)
 static char advance(void)
 {
     lexer.current++;
+    lexer.column++;
     return lexer.current[-1];
 }
 
@@ -48,6 +51,7 @@ static token_t make_token(token_type_e type)
     token.start = lexer.start;
     token.length = lexer.current - lexer.start;
     token.line = lexer.line;
+    token.column = lexer.start_column;
     
     return token;
 }
@@ -59,6 +63,7 @@ static token_t make_error_token(const char *message)
     token.start = message;
     token.length = strlen(message);
     token.line = lexer.line;
+    token.column = lexer.start_column;
     
     return token;
 }
@@ -86,8 +91,9 @@ static void skip_whitespace(void)
                 advance();
                 break;
             case '\n':
-                lexer.line++;
                 advance();
+                lexer.line++;
+                lexer.column = 1;
                 break;
             default:
                 return;
@@ -132,6 +138,7 @@ token_t lexer_next_token(void)
 {
     skip_whitespace();
     lexer.start = lexer.current;
+    lexer.start_column = lexer.column;
 
     if (is_at_end()) return make_token(TOKEN_EOF);
 
@@ -144,8 +151,8 @@ token_t lexer_next_token(void)
         case ')': return make_token(TOKEN_RIGHT_PAREN);
         case '{': return make_token(TOKEN_LEFT_BRACE);
         case '}': return make_token(TOKEN_RIGHT_BRACE);
-        // case '[': return make_token(TOKEN_LEFT_BRACKET);
-        // case ']': return make_token(TOKEN_RIGHT_BRACKET);
+        case '[': return make_token(TOKEN_LEFT_BRACKET);
+        case ']': return make_token(TOKEN_RIGHT_BRACKET);
         case ';': return make_token(TOKEN_SEMICOLON);
         case '+': return make_token(TOKEN_PLUS);
         case '-': return make_token(TOKEN_MINUS);
@@ -154,20 +161,4 @@ token_t lexer_next_token(void)
     }
 
     return make_error_token("Unexpected character.");
-}
-
-const char *token_names[] = {
-#define X(name) [name] = #name,
-    TOKEN_LIST
-#undef X
-};
-
-void lexer_print_all(const char *source)
-{
-    lexer_init(source);
-    token_t token = lexer_next_token();
-    while (token.type != TOKEN_EOF) {
-        printf("%s\n", token_names[token.type]);
-        token = lexer_next_token();
-    }
 }

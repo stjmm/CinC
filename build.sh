@@ -12,3 +12,5 @@ $CC $CFLAGS \
     -I"$SRC_DIR" \
     "$SRC_DIR"/*.c \
     -o "$BUILD_DIR/$BIN"
+
+./build/cinc
