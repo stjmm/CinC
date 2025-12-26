@@ -10,7 +10,7 @@ mkdir -p "$BUILD_DIR"
 
 $CC $CFLAGS \
     -I"$SRC_DIR" \
-    "$SRC_DIR"/*.c \
+    $(find "$SRC_DIR/" -name "*.c") \
     -o "$BUILD_DIR/$BIN"
 
 ./build/cinc

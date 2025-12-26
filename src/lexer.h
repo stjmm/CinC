@@ -23,8 +23,8 @@
     X(TOKEN_INT) \
     X(TOKEN_RETURN) \
     /* Misc */ \
-    X(TOKEN_EOF) \
     X(TOKEN_ERROR) \
+    X(TOKEN_EOF) \
 
 typedef enum {
 #define X(name) name,
@@ -42,6 +42,5 @@ typedef struct {
 
 void lexer_init(const char *source);
 token_t lexer_next_token(void);
-void lexer_print_token(token_type_e type);
 
 #endif
