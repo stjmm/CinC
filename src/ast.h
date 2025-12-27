@@ -68,5 +68,6 @@ struct ast_node_t {
 ast_node_t *ast_new_number(token_t token);
 ast_node_t *ast_new_binary(token_t token, ast_node_t *left, ast_node_t *right);
 ast_node_t *ast_new_unary(token_t token, ast_node_t *left);
+void ast_print(ast_node_t *node, int indent);
 
 #endif

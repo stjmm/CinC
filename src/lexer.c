@@ -134,6 +134,11 @@ static token_t number(void)
     return make_token(TOKEN_NUMBER);
 }
 
+static void print_token(void)
+{
+
+}
+
 token_t lexer_next_token(void)
 {
     skip_whitespace();
