@@ -55,32 +55,33 @@ bool match(token_type_e type)
     return false;
 }
 
-static ast_node_t *statement(void);
-static ast_node_t *expression_statement(void);
+static ast_node_t *parse_statement(void);
+static ast_node_t *parse_expression_statement(void);
 static ast_node_t *parse_expression(precedence_e precedence);
 
-static ast_node_t *declaration(void)
+static ast_node_t *parse_declaration(void)
 {
     if (match(TOKEN_INT)) {
 
-    } else {
-        return statement();
     }
+
+    return parse_statement();
 }
 
-static ast_node_t *statement(void)
+static ast_node_t *parse_statement(void)
 {
     if (match(TOKEN_RETURN)) {
 
-    } else {
-        return expression_statement();
     }
+
+    return parse_expression_statement();
 }
 
-static ast_node_t *expression_statement(void)
+static ast_node_t *parse_expression_statement(void)
 {
     ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_SEMICOLON, "Expected ';' after expression.");
+    return expr;
 }
 
 static parse_rule_t parse_rules[] = {
@@ -103,10 +104,27 @@ static parse_rule_t parse_rules[] = {
     [TOKEN_EOF] = {NULL, NULL, NULL},
 };
 
+parse_rule_t *get_rule(token_type_e type)
+{
+    return &parse_rules[type];
+}
+
 // Here is where the actual "Vaughn-Pratt Parsing" happens
 static ast_node_t *parse_expression(precedence_e precedence)
 {
-    
+    advance();
+    parse_fn prefix_rule = get_rule(parser.current.type)->prefix;
+    if (prefix_rule == NULL) {
+        // Handle error
+    }
+    prefix_rule();
+
+    while (precedence <= get_rule(parser.current.type)->precedence) {
+        advance();
+        parse_fn infix_rule = get_rule(parser.current.type)->infix;
+        infix_rule();
+    }
+
 }
 
 ast_node_t *parse_program(const char *source)
