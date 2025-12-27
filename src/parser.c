@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdbool.h>
 
 #include "parser.h"
@@ -112,15 +113,16 @@ parse_rule_t *get_rule(token_type_e type)
 static ast_node_t *parse_expression(precedence_e precedence)
 {
     advance();
-    prefix_parse_fn prefix_rule = get_rule(parser.current.type)->prefix;
+    prefix_parse_fn prefix_rule = get_rule(parser.previous.type)->prefix;
     if (prefix_rule == NULL) {
         // Handle error
+        printf("ERROR!");
     }
     ast_node_t *left = prefix_rule();
 
     while (precedence <= get_rule(parser.current.type)->precedence) {
         advance();
-        infix_parse_fn infix_rule = get_rule(parser.current.type)->infix;
+        infix_parse_fn infix_rule = get_rule(parser.previous.type)->infix;
         left = infix_rule(left);
     }
     
@@ -141,8 +143,8 @@ ast_node_t *parse_program(const char *source, arena_t *arena)
     ast_arena = arena;
 
     lexer_init(source);
+    advance();
 
     ast_node_t *result = parse_expression_statement();
-
     return result;
 }
