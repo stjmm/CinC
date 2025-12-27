@@ -1,25 +1,16 @@
 #include <stdio.h>
 
-#include "lexer.h"
-
-static const char *token_names[] = {
-#define X(name) [name] = #name,
-    TOKEN_LIST
-#undef X
-};
+#include "parser.h"
+#include "base/arena.h"
 
 int main(void)
 {
-    const char *program_source = "int main() {\n    return 0;\n}\n";
-    lexer_init(program_source);
+    // const char *program_source = "int main() {\n    return 0;\n}\n";
+    const char *program_source = "5;";
 
-    token_t token = lexer_next_token();
-    printf("%-20s | %-5s | %-5s\n", "TOKEN_TYPE", "TOKEN_LINE", "TOKEN_COLUMN");
-    while (1) {
-        printf("%-20s | %-10d | %-5d\n", token_names[token.type], token.line, token.column);
-        if (token.type == TOKEN_EOF) break;
-        token = lexer_next_token();
-    }
+    arena_t *ast_arena = arena_create(1024 * 1024 * 10);
     
+    ast_node_t *root_node = parse_program(program_source, ast_arena);
+
     return 0;
 }
