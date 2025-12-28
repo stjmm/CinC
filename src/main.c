@@ -4,7 +4,7 @@
 
 int main(void)
 {
-    const char *program_source = "int main() {\n    return ((2  + 3) *5);\n return 0;\n}\n";
+    const char *program_source = "int main() {\n    return ((2  + 3) *5);\n return 0;\n}";
     // const char *program_source = "5 + 2 * 8;";
 
     arena_t *ast_arena = arena_create(1024 * 1024 * 10);

@@ -42,7 +42,7 @@ static void error_at(token_t *token, const char *message)
     if (parser.panic_mode) return;
     parser.panic_mode = true;
 
-    fprintf(stderr, "[line %d:%d] error", token->line, token->column);
+    fprintf(stderr, "[line %d:%d] Error", token->line, token->column);
     if (token->type == TOKEN_EOF) {
         fprintf(stderr, " at end");
     } else if (token->type == TOKEN_ERROR) {
@@ -234,6 +234,8 @@ static ast_node_t *parse_block(void)
         else if (parser.panic_mode)
             synchronize();
     }
+
+    consume(TOKEN_RIGHT_BRACE, "Expected '}' after body.");
 
     return block;
 }
