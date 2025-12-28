@@ -129,11 +129,46 @@ static ast_node_t *parse_expression(precedence_e precedence)
     return left;
 }
 
+//  -- Statements --
 static ast_node_t *parse_expression_statement(void)
 {
     ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_SEMICOLON, "Expected ';' after expression.");
     return expr;
+}
+
+static ast_node_t *parse_statement(void)
+{
+    if (match(TOKEN_RETURN)) {
+        ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+    }
+
+    return parse_expression_statement();
+}
+
+// -- Declarations --
+
+static ast_node_t parse_function(void)
+{
+    consume(TOKEN_IDENTIFIER, "Expected function name.");
+    token_t name = parser.previous;
+
+    consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
+    // TODO: Args
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name.");
+
+    consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
+    ast_node_t *body = parse_block();
+
+    return ast_new_unary
+}
+
+static ast_node_t *parse_declaration(void)
+{
+    if (match(TOKEN_INT)) {
+        token_t return_type = parser.previous;
+        return parse_function();
+    }
 }
 
 ast_node_t *parse_program(const char *source, arena_t *arena)
