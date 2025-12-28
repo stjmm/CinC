@@ -86,6 +86,7 @@ void ast_block_append(ast_node_t *block, ast_node_t *stmt);
 ast_node_t *ast_new_function(token_t name, token_t return_type, ast_node_t *body);
 
 ast_node_t *ast_new_program(void);
+void ast_program_append(ast_node_t *program, ast_node_t *decl);
 
 void ast_print(ast_node_t *node, int indent);
 

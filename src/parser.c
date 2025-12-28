@@ -130,45 +130,67 @@ static ast_node_t *parse_expression(precedence_e precedence)
 }
 
 //  -- Statements --
+
 static ast_node_t *parse_expression_statement(void)
 {
     ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_SEMICOLON, "Expected ';' after expression.");
-    return expr;
+    return ast_new_expr_stmt(expr);
 }
 
 static ast_node_t *parse_statement(void)
 {
     if (match(TOKEN_RETURN)) {
-        ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+        token_t keyword = parser.previous;
+        ast_node_t *expr = NULL;
+        if (!match(TOKEN_SEMICOLON)) {
+            expr = parse_expression(PREC_ASSIGNMENT);
+            consume(TOKEN_SEMICOLON, "Expected ';' after return value.");
+        }
+
+        return ast_new_return(keyword, expr);
     }
 
     return parse_expression_statement();
 }
 
+static ast_node_t *parse_block(void)
+{
+    ast_node_t *block = ast_new_block(parser.previous);
+
+    while (!match(TOKEN_RIGHT_BRACE) && parser.current.type != TOKEN_EOF) {
+        ast_node_t *stmt = parse_statement();
+        ast_block_append(block, stmt);
+    }
+
+    return block;
+}
+
 // -- Declarations --
 
-static ast_node_t parse_function(void)
+static ast_node_t* parse_function(token_t return_type)
 {
     consume(TOKEN_IDENTIFIER, "Expected function name.");
     token_t name = parser.previous;
 
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
-    // TODO: Args
+    // TODO: Parameters
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name.");
 
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
     ast_node_t *body = parse_block();
 
-    return ast_new_unary
+    return ast_new_function(return_type, name, body);
 }
 
 static ast_node_t *parse_declaration(void)
 {
     if (match(TOKEN_INT)) {
         token_t return_type = parser.previous;
-        return parse_function();
+        return parse_function(return_type);
     }
+
+    return NULL;
 }
 
 ast_node_t *parse_program(const char *source, arena_t *arena)
@@ -180,6 +202,13 @@ ast_node_t *parse_program(const char *source, arena_t *arena)
     lexer_init(source);
     advance();
 
-    ast_node_t *result = parse_expression_statement();
-    return result;
+    ast_node_t *program = ast_new_program();
+    while (parser.current.type != TOKEN_EOF) {
+        ast_node_t *decl = parse_declaration();
+        if (decl) {
+            ast_program_append(program, decl);
+        }
+    }
+
+    return program;
 }

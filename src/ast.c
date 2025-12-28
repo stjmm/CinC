@@ -151,6 +151,34 @@ void ast_print(ast_node_t *node, int indent)
             printf("AST_UNARY %s\n", token_type_to_str(node->token.type));
             ast_print(node->unary.operand, indent + 1);
             break;
+        case AST_EXPR_STMT:
+            printf("AST_EXPR_STMT\n");
+            ast_print(node->expr_stmt.expr, indent + 1);
+            break;
+        case AST_RETURN:
+            printf("AST_RETURN_STMT\n");
+            if (node->return_stmt.expr) {
+                ast_print(node->return_stmt.expr, indent + 1);
+            }
+            break;
+        case AST_BLOCK:
+            printf("AST_BLOCK (%d statements)\n", node->block.count);
+            for (int i = 0; i < node->block.count; i++) {
+                ast_print(node->block.stmts[i], indent + 1);
+            }
+            break;
+        case AST_FUNCTION:
+            printf("AST_FUNCTION %s '%.*s'\n",
+                   token_type_to_str(node->function.return_type.type),
+                   node->function.name.length, node->function.name.start);
+            ast_print(node->function.body, indent + 1);
+            break;
+        case AST_PROGRAM:
+            printf("AST_PROGRAM (%d declarations)\n", node->program.count);
+            for (int i = 0; i < node->program.count; i++) {
+                ast_print(node->program.decls[i], indent + 1);
+            }
+            break;
         default:
             printf("UNKNOWN NODE KIND %d\n", node->kind);
             break;
