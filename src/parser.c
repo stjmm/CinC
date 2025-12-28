@@ -72,6 +72,13 @@ static ast_node_t *unary(void)
     return ast_new_unary(op, operand);
 }
 
+static ast_node_t *grouping(void)
+{
+    ast_node_t *grouping = parse_expression(PREC_ASSIGNMENT);
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
+    return grouping;
+}
+
 // Infix parsers
 static ast_node_t *binary(ast_node_t *left)
 {
@@ -85,23 +92,23 @@ static ast_node_t *binary(ast_node_t *left)
 }
 
 static parse_rule_t parse_rules[] = {
-    [TOKEN_LEFT_PAREN] = {NULL, NULL, PREC_NONE},
-    [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
-    [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_LEFT_BRACKET] = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
+    [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
+    [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
-    [TOKEN_MINUS] = {NULL, binary, PREC_TERM},
-    [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
-    [TOKEN_STAR] = {NULL, binary, PREC_FACTOR},
-    [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
-    [TOKEN_EQUAL] = {NULL, NULL, PREC_NONE},
-    [TOKEN_IDENTIFIER] = {NULL, NULL, PREC_NONE},
-    [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
-    [TOKEN_INT] = {NULL, NULL, PREC_NONE},
-    [TOKEN_RETURN] = {NULL, NULL, PREC_NONE},
-    [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
-    [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
+    [TOKEN_MINUS]         = {NULL, binary, PREC_TERM},
+    [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
+    [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
+    [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
+    [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},
+    [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
+    [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
+    [TOKEN_ERROR]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
 };
 
 parse_rule_t *get_rule(token_type_e type)
@@ -180,7 +187,7 @@ static ast_node_t* parse_function(token_t return_type)
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
     ast_node_t *body = parse_block();
 
-    return ast_new_function(return_type, name, body);
+    return ast_new_function(name, return_type, body);
 }
 
 static ast_node_t *parse_declaration(void)
