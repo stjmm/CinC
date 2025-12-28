@@ -36,10 +36,64 @@ arena_t *ast_arena;
 static ast_node_t *parse_expression(precedence_e precedence);
 parse_rule_t *get_rule(token_type_e type);
 
+static void error_at(token_t *token, const char *message)
+{
+    // TODO: Add context aware error reporting
+    if (parser.panic_mode) return;
+    parser.panic_mode = true;
+
+    fprintf(stderr, "[line %d:%d] error", token->line, token->column);
+    if (token->type == TOKEN_EOF) {
+        fprintf(stderr, " at end");
+    } else if (token->type == TOKEN_ERROR) {
+        // Lexer error
+    } else {
+        fprintf(stderr, " at '%.*s'\n", token->length, token->start);
+    }
+    fprintf(stderr, ": %s\n", message);
+
+    parser.had_error = true;
+}
+
+static void error_at_current(const char *message)
+{
+    error_at(&parser.current, message);
+}
+
+static void error(const char *message)
+{
+    error_at(&parser.previous, message);
+}
+
 static void advance(void)
 {
     parser.previous = parser.current;
-    parser.current = lexer_next_token();
+    
+    for (;;) {
+        parser.current = lexer_next_token();
+        if (parser.current.type != TOKEN_ERROR) break;
+
+        error_at_current(parser.current.start);
+    }
+}
+
+static void synchronize(void)
+{
+    parser.panic_mode = false;
+
+    while (parser.current.type != TOKEN_EOF) {
+        if (parser.previous.type == TOKEN_SEMICOLON) return;
+
+        switch (parser.current.type) {
+            case TOKEN_INT:
+            case TOKEN_RETURN:
+                return;
+            default:
+                ;
+        }
+
+        advance();
+    }
 }
 
 void consume(token_type_e type, const char *message)
@@ -48,6 +102,8 @@ void consume(token_type_e type, const char *message)
         advance();
         return;
     }
+
+    error_at_current(message);
 }
 
 bool match(token_type_e type)
@@ -122,8 +178,8 @@ static ast_node_t *parse_expression(precedence_e precedence)
     advance();
     prefix_parse_fn prefix_rule = get_rule(parser.previous.type)->prefix;
     if (prefix_rule == NULL) {
-        // Handle error
-        printf("ERROR!");
+        error("Expected expression.");
+        return NULL;
     }
     ast_node_t *left = prefix_rule();
 
@@ -131,6 +187,7 @@ static ast_node_t *parse_expression(precedence_e precedence)
         advance();
         infix_parse_fn infix_rule = get_rule(parser.previous.type)->infix;
         left = infix_rule(left);
+        if (!left) return NULL;
     }
     
     return left;
@@ -141,6 +198,8 @@ static ast_node_t *parse_expression(precedence_e precedence)
 static ast_node_t *parse_expression_statement(void)
 {
     ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+    if (!expr) return NULL;
+
     consume(TOKEN_SEMICOLON, "Expected ';' after expression.");
     return ast_new_expr_stmt(expr);
 }
@@ -150,8 +209,11 @@ static ast_node_t *parse_statement(void)
     if (match(TOKEN_RETURN)) {
         token_t keyword = parser.previous;
         ast_node_t *expr = NULL;
+
         if (!match(TOKEN_SEMICOLON)) {
             expr = parse_expression(PREC_ASSIGNMENT);
+            if (!expr) return NULL;
+
             consume(TOKEN_SEMICOLON, "Expected ';' after return value.");
         }
 
@@ -167,7 +229,10 @@ static ast_node_t *parse_block(void)
 
     while (!match(TOKEN_RIGHT_BRACE) && parser.current.type != TOKEN_EOF) {
         ast_node_t *stmt = parse_statement();
-        ast_block_append(block, stmt);
+        if (stmt)
+            ast_block_append(block, stmt);
+        else if (parser.panic_mode)
+            synchronize();
     }
 
     return block;
@@ -186,6 +251,7 @@ static ast_node_t* parse_function(token_t return_type)
 
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
     ast_node_t *body = parse_block();
+    if (!body) return NULL;
 
     return ast_new_function(name, return_type, body);
 }
@@ -197,6 +263,7 @@ static ast_node_t *parse_declaration(void)
         return parse_function(return_type);
     }
 
+    error_at_current("Expected declaration.");
     return NULL;
 }
 
@@ -212,10 +279,12 @@ ast_node_t *parse_program(const char *source, arena_t *arena)
     ast_node_t *program = ast_new_program();
     while (parser.current.type != TOKEN_EOF) {
         ast_node_t *decl = parse_declaration();
-        if (decl) {
+        if (decl)
             ast_program_append(program, decl);
-        }
+
+        if (parser.panic_mode)
+            synchronize();
     }
 
-    return program;
+    return parser.had_error ? NULL : program;
 }
