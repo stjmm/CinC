@@ -44,7 +44,7 @@ static void error_at(token_t *token, const char *message)
 
     fprintf(stderr, "[line %d:%d] Error", token->line, token->column);
     if (token->type == TOKEN_EOF) {
-        fprintf(stderr, " at end");
+        fprintf(stderr, " at end of file");
     } else if (token->type == TOKEN_ERROR) {
         // Lexer error
     } else {
@@ -96,9 +96,14 @@ static void synchronize(void)
     }
 }
 
-void consume(token_type_e type, const char *message)
+static bool check(token_type_e type)
 {
-    if (parser.current.type == type) {
+    return parser.current.type == type;
+}
+
+static void consume(token_type_e type, const char *message)
+{
+    if (check(type)) {
         advance();
         return;
     }
@@ -106,9 +111,9 @@ void consume(token_type_e type, const char *message)
     error_at_current(message);
 }
 
-bool match(token_type_e type)
+static bool match(token_type_e type)
 {
-    if (parser.current.type == type) {
+    if (check(type)) {
         advance();
         return true;
     }
@@ -227,7 +232,7 @@ static ast_node_t *parse_block(void)
 {
     ast_node_t *block = ast_new_block(parser.previous);
 
-    while (!match(TOKEN_RIGHT_BRACE) && parser.current.type != TOKEN_EOF) {
+    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         ast_node_t *stmt = parse_statement();
         if (stmt)
             ast_block_append(block, stmt);

@@ -3,23 +3,27 @@
 
 #include "lexer.h"
 
+#define AST_KIND_LIST \
+    X(AST_NUMBER) \
+    X(AST_CHAR) \
+    X(AST_STRING) \
+    X(AST_IDENTIFIER) \
+    \
+    X(AST_BINARY) \
+    X(AST_UNARY) \
+    X(AST_EXPR_STMT) \
+    X(AST_RETURN) \
+    X(AST_BLOCK) \
+    \
+    X(AST_FUNCTION) \
+    X(AST_VAR_DECL) \
+    \
+    X(AST_PROGRAM)
+
 typedef enum {
-    AST_NUMBER,
-    AST_CHAR,
-    AST_STRING,
-    AST_IDENTIFIER,
-
-    AST_BINARY,
-    AST_UNARY,
-
-    AST_EXPR_STMT,
-    AST_RETURN,
-    AST_BLOCK,
-
-    AST_FUNCTION,
-    AST_VAR_DECL,
-
-    AST_PROGRAM,
+#define X(name) name,
+    AST_KIND_LIST
+#undef X
 } ast_kind_e;
 
 typedef struct ast_node_t ast_node_t;

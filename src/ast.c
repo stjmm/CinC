@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "ast.h"
+#include "lexer.h"
 #include "base/arena.h"
 
 extern arena_t *ast_arena;
@@ -117,64 +118,63 @@ static void print_indent(int indent)
     }
 }
 
-static const char *token_type_to_str(token_type_e type)
-{
-    switch (type) {
-        case TOKEN_PLUS: return "+";
-        case TOKEN_MINUS: return "-";
-        case TOKEN_STAR: return "*";
-        case TOKEN_SLASH: return "/";
-        case TOKEN_INT: return "int";
-        default: return "?";
-    }
-}
-
 void ast_print(ast_node_t *node, int indent)
 {
+    static const char *token_names[] = {
+#define X(name) [name] = #name,
+        TOKEN_LIST
+#undef X
+    };
+    static const char *ast_kind_names[] = {
+#define X(name) [name] = #name,
+        AST_KIND_LIST
+#undef X
+    };
+
     if (!node) {
         print_indent(indent);
         printf("(null)\n");
+        return;
     }
 
     print_indent(indent);
 
     switch (node->kind) {
         case AST_NUMBER:
-            printf("AST_NUMBER %ld\n", node->number.value);
+            printf("%s: %ld\n", ast_kind_names[node->kind], node->number.value);
             break;
         case AST_BINARY:
-            printf("AST_BINARY %s\n", token_type_to_str(node->token.type));
+            printf("%s: [%s]\n", ast_kind_names[node->kind], token_names[node->token.type]);
             ast_print(node->binary.left, indent + 1);
             ast_print(node->binary.right, indent + 1);
             break;
         case AST_UNARY:
-            printf("AST_UNARY %s\n", token_type_to_str(node->token.type));
+            printf("%s: [%s]\n", ast_kind_names[node->kind], token_names[node->token.type]);
             ast_print(node->unary.operand, indent + 1);
             break;
         case AST_EXPR_STMT:
-            printf("AST_EXPR_STMT\n");
+            printf("%s\n", ast_kind_names[node->kind]);
             ast_print(node->expr_stmt.expr, indent + 1);
             break;
         case AST_RETURN:
-            printf("AST_RETURN_STMT\n");
+            printf("%s\n", ast_kind_names[node->kind]);
             if (node->return_stmt.expr) {
                 ast_print(node->return_stmt.expr, indent + 1);
             }
             break;
         case AST_BLOCK:
-            printf("AST_BLOCK (%d statements)\n", node->block.count);
+            printf("%s (%d statements)\n", ast_kind_names[node->kind], node->block.count);
             for (int i = 0; i < node->block.count; i++) {
                 ast_print(node->block.stmts[i], indent + 1);
             }
             break;
         case AST_FUNCTION:
-            printf("AST_FUNCTION %s '%.*s'\n",
-                   token_type_to_str(node->function.return_type.type),
-                   node->function.name.length, node->function.name.start);
+            printf("%s '%.*s'\n", token_names[node->token.type], node->function.name.length,
+                   node->function.name.start);
             ast_print(node->function.body, indent + 1);
             break;
         case AST_PROGRAM:
-            printf("AST_PROGRAM (%d declarations)\n", node->program.count);
+            printf("%s (%d declarations)\n", ast_kind_names[node->kind], node->block.count);
             for (int i = 0; i < node->program.count; i++) {
                 ast_print(node->program.decls[i], indent + 1);
             }
