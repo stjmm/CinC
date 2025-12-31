@@ -44,6 +44,14 @@ static char peek_next(void)
     return lexer.current[1];
 }
 
+static bool match(char expected)
+{
+    if (is_at_end()) return false;
+    if (*lexer.current != expected) return false;
+    lexer.current++; lexer.column++;
+    return true;
+}
+
 static token_t make_token(token_type_e type)
 {
     token_t token;
@@ -160,9 +168,17 @@ token_t lexer_next_token(void)
         case ']': return make_token(TOKEN_RIGHT_BRACKET);
         case ';': return make_token(TOKEN_SEMICOLON);
         case '+': return make_token(TOKEN_PLUS);
-        case '-': return make_token(TOKEN_MINUS);
+        case '-': {
+            if (match('-')) {
+                return make_token(TOKEN_MINUS_MINUS);
+            } else {
+                return make_token(TOKEN_MINUS);
+            }
+        }
         case '*': return make_token(TOKEN_STAR);
         case '/': return make_token(TOKEN_SLASH);
+        case '~': return make_token(TOKEN_TILDE);
+        case '=': return make_token(TOKEN_EQUAL);
     }
 
     return make_error_token("Unexpected character.");

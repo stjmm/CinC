@@ -12,9 +12,11 @@
     X(TOKEN_SEMICOLON) \
     /* One or two char tokens */ \
     X(TOKEN_MINUS) \
+    X(TOKEN_MINUS_MINUS) \
     X(TOKEN_PLUS) \
     X(TOKEN_STAR) \
     X(TOKEN_SLASH) \
+    X(TOKEN_TILDE) \
     X(TOKEN_EQUAL) \
     /* Literals */ \
     X(TOKEN_IDENTIFIER) \

@@ -31,7 +31,6 @@ typedef struct {
 } parse_rule_t;
 
 static parser_t parser;
-arena_t *ast_arena;
 
 static ast_node_t *parse_expression(precedence_e precedence);
 parse_rule_t *get_rule(token_type_e type);
@@ -278,7 +277,6 @@ ast_node_t *parse_program(const char *source, arena_t *arena)
 {
     parser.had_error = false;
     parser.panic_mode = false;
-    ast_arena = arena;
 
     lexer_init(source);
     advance();
