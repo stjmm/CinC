@@ -1,6 +1,9 @@
 #ifndef CINC_LEXER_H
 #define CINC_LEXER_H
 
+#include <stdint.h>
+#include <stddef.h>
+
 #define TOKEN_LIST \
     /* Single character tokens */ \
     X(TOKEN_LEFT_PAREN)           \
@@ -34,10 +37,16 @@ typedef enum {
 #undef X
 } token_type_e;
 
+const char *token_name_strings[] = {
+#define X(tok_name) [tok_name] = #tok_name,
+    TOKEN_LIST
+#undef X
+};
+
 typedef struct {
     token_type_e type;
     const char *start;
-    unsigned int length;
+    size_t length;
     unsigned int line;
     unsigned int column;
 } token_t;
