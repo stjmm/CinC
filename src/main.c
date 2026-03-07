@@ -1,21 +1,18 @@
 #include <stdio.h>
 
+#include "ast.h"
+#include "parser.h"
 #include "lexer.h"
+#include "arena.h"
 
 int main(int argc, char **argv)
 {
     const char *program_source = { "int main(void) \n{ return 2; }\n"};
+    arena_t *phase = arena_new(1024 * 1024);
+    arena_t *perm = arena_new(1024 * 1024);
 
-    lexer_init(program_source);
-    token_t tok = lexer_next_token();
-    while (tok.type != TOKEN_EOF) {
-        const char *tok_str = token_name_strings[tok.type];
-        printf("%s: %.*s (line %u, col %u)\n",
-               tok_str,
-               (int)tok.length,
-               tok.start,
-               tok.line,
-               tok.column);
-        tok = lexer_next_token();
-    }
+    /* LEXER PHASE */
+
+    /* PARSER/AST PHASE */
+    ast_node_t *root = parse_program(program_source, phase);
 }

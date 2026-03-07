@@ -37,12 +37,6 @@ typedef enum {
 #undef X
 } token_type_e;
 
-const char *token_name_strings[] = {
-#define X(tok_name) [tok_name] = #tok_name,
-    TOKEN_LIST
-#undef X
-};
-
 typedef struct {
     token_type_e type;
     const char *start;
