@@ -33,13 +33,6 @@ typedef struct {
 static parser_t parser;
 static arena_t *phase;
 
-static ast_node_t *ast_new(ast_kind_e kind, token_t token)
-{
-    ast_node_t *node = ARENA_ALLOC(phase, ast_node_t);
-    *node = (ast_node_t){.kind = kind, .token = token };
-    return node;
-}
-
 static void advance(void)
 {
     parser.previous = parser.current;
@@ -72,8 +65,8 @@ static bool match(token_type_e type)
 
 static ast_node_t *number(void)
 {
-    ast_node_t *node = ast_new(AST_CONSTANT, parser.previous);
-    node->constant.value = strtol(parser.previous.start, NULL, 10);
+    ast_node_t *node = AST_NEW(AST_CONSTANT, parser.previous,
+        .constant.value = strtol(parser.previous.start, NULL, 10));
     return node;
 }
 
@@ -100,9 +93,27 @@ static parse_rule_t parse_rules[] = {
     [TOKEN_EOF]           = {NULL, NULL, PREC_LOWEST},
 };
 
-static parse_rule_t *get_rule(token_t tok)
+static parse_rule_t *get_rule(token_type_e type)
 {
-    return &parse_rules[tok.type];
+    return &parse_rules[type];
+}
+
+static ast_node_t *parse_expression(precedence_e precedence)
+{
+    advance();
+    prefix_parse_fn prefix = get_rule(parser.previous.type)->prefix;
+    if (!prefix) {
+        // Error
+        return NULL;
+    }
+    ast_node_t *left = prefix();
+
+    while (precedence <= get_rule(parser.current.type)->precedence) {
+        advance();
+        infix_parse_fn infix = get_rule(parser.previous.type)->infix;
+        left = infix(left);
+    }
+    return left;
 }
 
 /* Statements & Declarations */
@@ -113,16 +124,27 @@ static ast_node_t *parse_expr_stmt(void)
     return expr;
 }
 
-static ast_node_t *parse_stmt(void)
+static ast_node_t *parse_statement(void)
 {
     if (match(TOKEN_RETURN)) {
-        
+        ast_node_t *return_node = AST_NEW(AST_RETURN, parser.previous);
     }
+
+    return parse_expr_stmt();
 }
 
 static ast_node_t *parse_block(void)
 {
-    ast_node_t *block = ast_new(AST_BLOCK, parser.previous);
+    ast_node_t *block = AST_NEW(AST_BLOCK, parser.previous);
+    ast_node_t *tail = NULL;
+
+    while (!check(TOKEN_RIGHT_BRACKET) && !check(TOKEN_EOF)) {
+        ast_node_t *stmt = parse_statement();
+        AST_LIST_APPEND(block->block.first, tail, stmt);
+    }
+
+    consume(TOKEN_RIGHT_BRACE, "Expected '}' after body.");
+    return block;
 }
 
 static ast_node_t *parse_function(void)
@@ -133,8 +155,10 @@ static ast_node_t *parse_function(void)
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name.");
 
-    consume (TOKEN_LEFT_BRACE, "Expected '{' before function body.");
+    consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
     ast_node_t *body = parse_block();
+
+    return body;
 }
 
 static ast_node_t *parse_declaration(void)
@@ -146,22 +170,18 @@ static ast_node_t *parse_declaration(void)
     return NULL;
 }
 
-ast_node_t *parse_program(const char *source, arena_t *phase_)
+ast_node_t *parse_program(const char *source, arena_t *_phase)
 {
     lexer_init(source);
     advance(); // Prime out parser
-    phase = phase_;
+    phase = _phase;
 
-    ast_node_t *program = AST_NEW(AST_PROGRAM);
+    ast_node_t *program = AST_NEW(AST_PROGRAM, parser.previous);
     ast_node_t *tail = NULL;
     
     while (!check(TOKEN_EOF)) {
         ast_node_t *decl = parse_declaration();
-
-        if (!tail) program->program.first = decl;
-        else tail->next = decl;
-
-        tail = decl;
+        AST_LIST_APPEND(program->program.first, tail, decl);
     }
 
     return program;

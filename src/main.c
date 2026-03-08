@@ -1,8 +1,4 @@
-#include <stdio.h>
-
-#include "ast.h"
 #include "parser.h"
-#include "lexer.h"
 #include "arena.h"
 
 int main(int argc, char **argv)

@@ -3,6 +3,19 @@
 
 #include "lexer.h"
 
+#define AST_NEW(_kind, tok, ...) ({                                  \
+    ast_node_t *_n = ARENA_ALLOC(phase, ast_node_t);                \
+    *_n = (ast_node_t){ .kind = _kind, .token = tok, .next = NULL, __VA_ARGS__ };\
+    _n;                                                             \
+})
+
+#define AST_LIST_APPEND(head, tail, node)   \
+    do {                                    \
+        if (!(tail)) (head) = (node);       \
+        else (tail)->next = (node);         \
+        (tail) = (node);                    \
+    } while(0)
+
 #define AST_KIND_LIST   \
     /* Expressions */   \
     X(AST_CONSTANT)     \
@@ -14,7 +27,7 @@
     /* Declarations */  \
     X(AST_FUNCTION)     \
     /* Top level */     \
-    X(AST_PROGRAM)      \
+    X(AST_PROGRAM)      
 
 typedef enum {
 #define X(ast_name) ast_name,
@@ -37,5 +50,7 @@ struct ast_node_t {
         struct { ast_node_t *first; } program;
     };
 };
+
+void ast_print(ast_node_t *root);
 
 #endif

@@ -4,6 +4,6 @@
 #include "ast.h"
 #include "arena.h"
 
-ast_node_t *parse_program(const char *source, arena_t *phase_);
+ast_node_t *parse_program(const char *source, arena_t *_phase);
 
 #endif
