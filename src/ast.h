@@ -51,6 +51,6 @@ struct ast_node_t {
     };
 };
 
-void ast_print(ast_node_t *root);
+void ast_print(ast_node_t *node, int depth);
 
 #endif

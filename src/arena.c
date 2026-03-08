@@ -10,7 +10,7 @@ arena_t *arena_new(size_t capacity)
     arena_t *arena = malloc(sizeof(arena_t));
     if (!arena) return NULL;
 
-    arena->buffer = malloc(sizeof(arena->buffer) * capacity);
+    arena->buffer = malloc(capacity);
     if (!arena->buffer) return NULL;
 
     arena->capacity = capacity;
@@ -26,7 +26,7 @@ void *arena_alloc(arena_t *arena, size_t size)
     if (aligned_offset + size > arena->capacity) return NULL;
 
     void *ptr = arena->buffer + aligned_offset;
-    arena->offset = aligned_offset;
+    arena->offset = aligned_offset + size;
 
     return ptr;
 }

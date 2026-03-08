@@ -120,14 +120,26 @@ static ast_node_t *parse_expression(precedence_e precedence)
 
 static ast_node_t *parse_expr_stmt(void)
 {
-    ast_node_t *expr = NULL;
-    return expr;
+    ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+    if (!expr) return NULL;
+    consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
+    return AST_NEW(AST_EXPR_STMT, parser.previous, .expr_stmt.expr = expr);
 }
 
 static ast_node_t *parse_statement(void)
 {
     if (match(TOKEN_RETURN)) {
-        ast_node_t *return_node = AST_NEW(AST_RETURN, parser.previous);
+        token_t tok = parser.previous;
+        ast_node_t *expr = NULL;
+
+        if (!match(TOKEN_SEMICOLON)) {
+            expr = parse_expression(PREC_ASSIGNMENT);
+            if (!expr) return NULL;
+
+            consume(TOKEN_SEMICOLON, "Expect ';' after return value");
+        }
+
+        return AST_NEW(AST_RETURN, tok, .return_stmt.expr = expr);
     }
 
     return parse_expr_stmt();
@@ -140,15 +152,16 @@ static ast_node_t *parse_block(void)
 
     while (!check(TOKEN_RIGHT_BRACKET) && !check(TOKEN_EOF)) {
         ast_node_t *stmt = parse_statement();
-        AST_LIST_APPEND(block->block.first, tail, stmt);
+        if (stmt) AST_LIST_APPEND(block->block.first, tail, stmt);
     }
 
-    consume(TOKEN_RIGHT_BRACE, "Expected '}' after body.");
+    consume(TOKEN_RIGHT_BRACKET, "Expected '}' after body.");
     return block;
 }
 
 static ast_node_t *parse_function(void)
 {
+    token_t return_type = parser.previous;
     consume(TOKEN_IDENTIFIER, "Expected function name.");
     token_t name = parser.previous;
 
@@ -158,7 +171,10 @@ static ast_node_t *parse_function(void)
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
     ast_node_t *body = parse_block();
 
-    return body;
+    return AST_NEW(AST_FUNCTION, name,
+        .function.name = name,
+        .function.return_type = return_type,
+        .function.body = body);
 }
 
 static ast_node_t *parse_declaration(void)
@@ -181,7 +197,7 @@ ast_node_t *parse_program(const char *source, arena_t *_phase)
     
     while (!check(TOKEN_EOF)) {
         ast_node_t *decl = parse_declaration();
-        AST_LIST_APPEND(program->program.first, tail, decl);
+        if (decl) AST_LIST_APPEND(program->program.first, tail, decl);
     }
 
     return program;
