@@ -15,6 +15,9 @@ build/%.o: src/%.c | build
 build:
 	mkdir -p build
 
+run:
+	./build/cinc
+
 clean:
 	rm -rf build
 
