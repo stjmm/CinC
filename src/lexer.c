@@ -6,6 +6,7 @@
 typedef struct {
     const char *start;
     const char *current;
+    const char *line_start;
     int line;
 } lexer_t;
 
@@ -15,6 +16,7 @@ void lexer_init(const char *source)
 {
     lexer.start = source;
     lexer.current = source;
+    lexer.line_start = source;
     lexer.line = 1;
 }
 
@@ -55,6 +57,7 @@ static token_t make_token(token_type_e type)
     tok.length = lexer.current - lexer.start;
     tok.type = type;
     tok.line = lexer.line;
+    tok.line_start = lexer.line_start;
     return tok;
 }
 
@@ -72,6 +75,7 @@ static void skip_whitespace(void)
             case '\n':
                 advance();
                 lexer.line++;
+                lexer.line_start = lexer.current;
                 break;
             default:
                 return;

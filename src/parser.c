@@ -1,21 +1,18 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "parser.h"
-#include "arena.h"
 #include "lexer.h"
-#include "ast.h"
 
 typedef struct {
-    token_t previous;
     token_t current;
+    token_t previous;
     bool had_error;
     bool panic_mode;
 } parser_t;
 
 typedef ast_node_t* (*prefix_parse_fn)(void);
-typedef ast_node_t* (*infix_parse_fn)(ast_node_t *left);
+typedef ast_node_t* (*infix_parse_fn)(ast_node_t *);
 
 typedef enum {
     PREC_LOWEST,
@@ -30,36 +27,16 @@ typedef enum {
 typedef struct {
     prefix_parse_fn prefix;
     infix_parse_fn  infix;
-    int precedence;
+    precedence_e precedence;
 } parse_rule_t;
 
 static parser_t parser;
-static arena_t *phase;
-static const char *source_start;
 
-static void error(token_t tok, const char *message)
+static void error(token_t *tok, const char *message)
 {
     if (parser.panic_mode) return;
     parser.panic_mode = true;
 
-    fprintf(stderr, "[line %d:%d] Error: %s\n", tok.line, tok.column, message);
-
-    const char *line_start = tok.start;
-    while (line_start > source_start && line_start[-1] != '\n')
-        line_start--;
-
-    const char *line_end = tok.start;
-    while (*line_end && *line_end != '\n')
-        line_end++;
-
-    fwrite(line_start, 1, line_end - line_start, stderr);
-    fprintf(stderr, "\n");
-
-    for (int i = 0; i < (int)tok.column; i++)
-        fprintf(stderr, " ");
-    
-    fprintf(stderr, "^\n");
-    
     parser.had_error = true;
 }
 
@@ -70,7 +47,7 @@ static void advance(void)
         parser.current = lexer_next_token();
         if (parser.current.type != TOKEN_ERROR) break;
 
-        error(parser.current, "Unexpected character.");
+        error(&parser.current, "Unexpected character");
     }
 }
 
@@ -80,7 +57,6 @@ static void synchronize(void)
 
     while (parser.current.type != TOKEN_EOF) {
         if (parser.previous.type == TOKEN_SEMICOLON) return;
-
         switch (parser.current.type) {
             case TOKEN_INT:
             case TOKEN_RETURN:
@@ -105,7 +81,7 @@ static void consume(token_type_e type, const char *message)
         return;
     }
 
-    error(parser.current, message);
+    error(&parser.current, message);
 }
 
 static bool match(token_type_e type)
@@ -117,13 +93,16 @@ static bool match(token_type_e type)
     return false;
 }
 
-/* Pratt-Parser Functions */
+/* Expression parsing (Pratt) */
 
 static ast_node_t *number(void)
 {
-    ast_node_t *node = AST_NEW(AST_CONSTANT, parser.previous,
-        .constant.value = strtol(parser.previous.start, NULL, 10));
-    return node;
+    long value = strtol(parser.previous.start, NULL, 10);
+    return AST_NEW(
+        AST_CONSTANT,
+        parser.previous,
+        .constant.value = value
+    );
 }
 
 static parse_rule_t parse_rules[] = {
@@ -139,7 +118,6 @@ static parse_rule_t parse_rules[] = {
     [TOKEN_PLUS]          = {NULL, NULL, PREC_LOWEST},
     [TOKEN_STAR]          = {NULL, NULL, PREC_LOWEST},
     [TOKEN_SLASH]         = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_TILDE]         = {NULL, NULL, PREC_LOWEST},
     [TOKEN_EQUAL]         = {NULL, NULL, PREC_LOWEST},
     [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_LOWEST},
     [TOKEN_NUMBER]        = {number, NULL, PREC_LOWEST},
@@ -154,48 +132,46 @@ static parse_rule_t *get_rule(token_type_e type)
     return &parse_rules[type];
 }
 
-static ast_node_t *parse_expression(precedence_e precedence)
+static ast_node_t *parse_expression(precedence_e prec)
 {
     advance();
     prefix_parse_fn prefix = get_rule(parser.previous.type)->prefix;
     if (!prefix) {
-        // Error
+        error(&parser.previous, "Expected expression");
         return NULL;
     }
     ast_node_t *left = prefix();
 
-    while (precedence <= get_rule(parser.current.type)->precedence) {
+    while (prec <= get_rule(parser.current.type)->precedence) {
         advance();
         infix_parse_fn infix = get_rule(parser.previous.type)->infix;
         left = infix(left);
     }
+
     return left;
 }
-
-/* Statements & Declarations */
 
 static ast_node_t *parse_expr_stmt(void)
 {
     ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
     if (!expr) return NULL;
-    consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
+    consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
     return AST_NEW(AST_EXPR_STMT, parser.previous, .expr_stmt.expr = expr);
 }
 
 static ast_node_t *parse_statement(void)
 {
     if (match(TOKEN_RETURN)) {
-        token_t tok = parser.previous;
+        token_t return_tok = parser.previous;
         ast_node_t *expr = NULL;
-
         if (!match(TOKEN_SEMICOLON)) {
             expr = parse_expression(PREC_ASSIGNMENT);
             if (!expr) return NULL;
 
-            consume(TOKEN_SEMICOLON, "Expect ';' after return value");
+            consume(TOKEN_SEMICOLON, "Expected ';' after return value");
         }
 
-        return AST_NEW(AST_RETURN, tok, .return_stmt.expr = expr);
+        return AST_NEW(AST_RETURN, return_tok, .return_stmt.expr = expr);
     }
 
     return parse_expr_stmt();
@@ -208,11 +184,16 @@ static ast_node_t *parse_block(void)
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         ast_node_t *stmt = parse_statement();
-        if (stmt) AST_LIST_APPEND(block->block.first, tail, stmt);
-        else if (parser.panic_mode) synchronize();
+        if (!stmt) {
+            if (parser.panic_mode) { synchronize(); continue; }
+        }
+        
+        if (!tail) block->block.first = stmt;
+        else tail->next = stmt;
+        tail = stmt;
     }
 
-    consume(TOKEN_RIGHT_BRACE, "Expected '}' after body.");
+    consume(TOKEN_RIGHT_BRACE, "Expected '}' after body");
     return block;
 }
 
@@ -241,24 +222,27 @@ static ast_node_t *parse_declaration(void)
         return parse_function();
     }
 
-    error(parser.previous, "Expected declaration.");
+    error(&parser.previous, "Expected declaration");
     return NULL;
 }
 
-ast_node_t *parse_program(const char *source, arena_t *_phase)
+ast_node_t *parse_program(const char *source)
 {
     lexer_init(source);
-    advance(); // Prime out parser
-    phase = _phase;
-    source_start = source;
+    advance();
 
     ast_node_t *program = AST_NEW(AST_PROGRAM, parser.previous);
     ast_node_t *tail = NULL;
-    
+
     while (!check(TOKEN_EOF)) {
         ast_node_t *decl = parse_declaration();
-        if (decl) AST_LIST_APPEND(program->program.first, tail, decl);
-        else if (parser.panic_mode) synchronize();
+        if (!decl) {
+            if (parser.panic_mode) { synchronize(); continue; }
+        }
+
+        if (!tail) program->program.first = decl;
+        else tail->next = decl;
+        tail = decl;
     }
 
     return parser.had_error ? NULL : program;
