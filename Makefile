@@ -15,7 +15,12 @@ debug: $(EXE)
 release: CFLAGS += -03 -DNDEBUG
 release: $(EXE)
 
-$(BUILD)/%.o: src
+$(BUILD)/%.o: src/%.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ %<
+
+$(EXE): $(OBJ)
+	$(CC) -o $@ $^
 
 clean:
 	rm -rf $(BUILD)

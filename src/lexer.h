@@ -19,7 +19,6 @@
     X(TOKEN_PLUS)                 \
     X(TOKEN_STAR)                 \
     X(TOKEN_SLASH)                \
-    X(TOKEN_TILDE)                \
     X(TOKEN_EQUAL)                \
     /* Literals */                \
     X(TOKEN_IDENTIFIER)           \
@@ -41,8 +40,8 @@ typedef struct {
     token_type_e type;
     const char *start;
     size_t length;
-    unsigned int line;
-    unsigned int column;
+    int line;
+    int column;
 } token_t;
 
 void lexer_init(const char *source);

@@ -6,9 +6,7 @@
 typedef struct {
     const char *start;
     const char *current;
-    unsigned int line;
-    unsigned int column;
-    unsigned int token_column;
+    int line;
 } lexer_t;
 
 static lexer_t lexer;
@@ -18,8 +16,6 @@ void lexer_init(const char *source)
     lexer.start = source;
     lexer.current = source;
     lexer.line = 1;
-    lexer.column = 0;
-    lexer.token_column = 0;
 }
 
 static bool is_at_end(void)
@@ -30,19 +26,12 @@ static bool is_at_end(void)
 static char advance(void)
 {
     lexer.current++;
-    lexer.column++;
     return lexer.current[-1];
 }
 
 static char peek(void)
 {
     return *lexer.current;
-}
-
-static char peek_next(void)
-{
-    if (is_at_end()) return '\0';
-    return lexer.current[1];
 }
 
 static bool is_alpha(char c)
@@ -66,7 +55,6 @@ static token_t make_token(token_type_e type)
     tok.length = lexer.current - lexer.start;
     tok.type = type;
     tok.line = lexer.line;
-    tok.column = lexer.token_column;
     return tok;
 }
 
@@ -84,7 +72,6 @@ static void skip_whitespace(void)
             case '\n':
                 advance();
                 lexer.line++;
-                lexer.column = 0;
                 break;
             default:
                 return;
@@ -128,7 +115,6 @@ token_t lexer_next_token()
 {
     skip_whitespace();
     lexer.start = lexer.current;
-    lexer.token_column = lexer.column;
 
     if (is_at_end()) return make_token(TOKEN_EOF);
 
