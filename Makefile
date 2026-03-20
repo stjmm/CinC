@@ -1,24 +1,21 @@
-CC = cc
-CFLAGS = -Wall -Wextra -g
-SRC = $(wildcard src/*.c)
-OBJ = $(patsubst src/%.c, build/%.o, $(SRC))
-TARGET = build/cinc
+CC=gcc
+CFLAGS=-Wall -Wextra -std=c11
 
-all: $(TARGET)
+BUILD=build
+EXE=$(BUILD)/cinc
 
-$(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+SRC=$(wildcard src/*.c)
+OBJ=$(SRC:%.c=$(BUILD)/%.o)
 
-build/%.o: src/%.c | build
-	$(CC) $(CFLAGS) -c $< -o $@
+all: debug
 
-build:
-	mkdir -p build
+debug: CFLAGS += -g
+debug: $(EXE)
 
-run:
-	./build/cinc
+release: CFLAGS += -03 -DNDEBUG
+release: $(EXE)
+
+$(BUILD)/%.o: src
 
 clean:
-	rm -rf build
-
-.PHONY: all clean
+	rm -rf $(BUILD)
