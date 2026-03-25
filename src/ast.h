@@ -13,6 +13,7 @@
     /* Expressions */   \
     X(AST_CONSTANT)     \
     X(AST_IDENTIFIER)   \
+    X(AST_UNARY)        \
     /* Statements */    \
     X(AST_EXPR_STMT)    \
     X(AST_RETURN)       \
@@ -36,6 +37,7 @@ struct ast_node_t {
     union {
         struct { long value; } constant;
         struct {} identifier;
+        struct { ast_node_t *expr; } unary;
         struct { ast_node_t *expr; } expr_stmt;
         struct { ast_node_t *expr; } return_stmt;
         struct { ast_node_t *first; } block;

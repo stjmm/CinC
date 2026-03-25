@@ -2,11 +2,10 @@
 #include <stdlib.h>
 
 #include "parser.h"
-#include "asm.h"
 
 int main(int argc, char **argv)
 {
-    const char *program_source = "int main(void) \n{ return 2; }\n";
+    const char *program_source = "int main(void) \n{ return ~(-2); }\n";
 
     /* LEXER PHASE */
 
@@ -16,7 +15,4 @@ int main(int argc, char **argv)
         exit(1);
     }
     ast_print(root, 0);
-
-    FILE *f = fopen("lol.asm", "w+");
-    codegen(root, f);
 }

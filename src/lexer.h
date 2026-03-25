@@ -19,6 +19,7 @@
     X(TOKEN_PLUS)                 \
     X(TOKEN_STAR)                 \
     X(TOKEN_SLASH)                \
+    X(TOKEN_TILDE)                \
     X(TOKEN_EQUAL)                \
     /* Literals */                \
     X(TOKEN_IDENTIFIER)           \

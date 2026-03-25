@@ -36,6 +36,14 @@ static char peek(void)
     return *lexer.current;
 }
 
+static bool match(char expected)
+{
+    if (is_at_end()) return false;
+    if (*lexer.current != expected) return false;
+    lexer.current++;
+    return true;
+}
+
 static bool is_alpha(char c)
 {
     if ((c >= 'a' && c <= 'z') ||
@@ -131,6 +139,10 @@ token_t lexer_next_token()
         case ')': return make_token(TOKEN_RIGHT_PAREN);
         case '{': return make_token(TOKEN_LEFT_BRACE);
         case '}': return make_token(TOKEN_RIGHT_BRACE);
+        case '-':
+            if (match('-')) return make_token(TOKEN_MINUS_MINUS);
+            else return make_token(TOKEN_MINUS);
+        case '~': return make_token(TOKEN_TILDE);
         case ';': return make_token(TOKEN_SEMICOLON);
     }
 

@@ -15,7 +15,7 @@ typedef ast_node_t* (*prefix_parse_fn)(void);
 typedef ast_node_t* (*infix_parse_fn)(ast_node_t *);
 
 typedef enum {
-    PREC_LOWEST,
+    PREC_NONE,
     PREC_ASSIGNMENT, // =
     PREC_TERM,       // -+
     PREC_FACTOR,     // */
@@ -95,6 +95,8 @@ static bool match(token_type_e type)
 
 /* Expression parsing (Pratt) */
 
+static ast_node_t *parse_expression(precedence_e prec);
+
 static ast_node_t *number(void)
 {
     long value = strtol(parser.previous.start, NULL, 10);
@@ -105,26 +107,42 @@ static ast_node_t *number(void)
     );
 }
 
+static ast_node_t *unary(void)
+{
+    token_t op = parser.previous;
+    ast_node_t *expr = parse_expression(PREC_UNARY);
+    if (!expr) return NULL;
+    return AST_NEW(AST_UNARY, op, .unary.expr = expr);
+}
+
+static ast_node_t *grouping(void)
+{
+    ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after expression");
+    return expr;
+}
+
 static parse_rule_t parse_rules[] = {
-    [TOKEN_LEFT_PAREN]    = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_MINUS]         = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_PLUS]          = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_STAR]          = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_SLASH]         = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_EQUAL]         = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_NUMBER]        = {number, NULL, PREC_LOWEST},
-    [TOKEN_INT]           = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_RETURN]        = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_ERROR]         = {NULL, NULL, PREC_LOWEST},
-    [TOKEN_EOF]           = {NULL, NULL, PREC_LOWEST},
+    [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
+    [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
+    [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
+    [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
+    [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
+    [TOKEN_MINUS]         = {unary, NULL, PREC_UNARY},
+    [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
+    [TOKEN_PLUS]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_STAR]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_SLASH]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
+    [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},
+    [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
+    [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
+    [TOKEN_ERROR]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
 };
 
 static parse_rule_t *get_rule(token_type_e type)
