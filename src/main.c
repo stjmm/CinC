@@ -1,7 +1,7 @@
-#include <stdio.h>
 #include <stdlib.h>
 
 #include "parser.h"
+#include "ir.h"
 
 int main(int argc, char **argv)
 {
@@ -15,4 +15,6 @@ int main(int argc, char **argv)
         exit(1);
     }
     ast_print(root, 0);
+
+    ir_program_t *ir = tacky_emit(root);
 }
