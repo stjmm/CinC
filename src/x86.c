@@ -1,7 +1,21 @@
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "x86.h"
 #include "ir.h"
+
+#define REG_NAME_32(r) ((r) == REG_AX ? "eax" : "r10d")
+
+#define EMIT_OPERAND(file, op)      \
+    do {                            \
+        operand_t _o = (op);        \
+        if (_o.type == OPERAND_REG) \
+            fprintf((file), "%%%s", REG_NAME_32(_o.reg)); \
+        else if (_o.type == OPERAND_IMM) \
+            fprintf((file), "$%d", _o.imm); \
+        else \
+            fprintf((file), "%d(%%rbp)", _o.stack); \
+    } while(0)
 
 /* Phase 1: Convert TACKY IR to ASM AST. Keeps temporary variables (pseduos) */
 
@@ -36,10 +50,12 @@ static void emit_instr(asm_function_t *fn, ir_instr_t *instr)
 {
     switch (instr->type) {
         case IR_RETURN: {
+            operand_t src = convert_val(instr->ret.src);
             asm_instr_t *mov = calloc(1, sizeof(asm_instr_t));
             mov->type = ASM_MOV;
-            mov->mov.src.imm = instr->ret.src.constant;
-            mov->mov.dst.reg = REG_AX;
+            mov->mov.src = src;
+            mov->mov.dst.type = OPERAND_REG;
+            mov->mov.dst.reg= REG_AX;
             append_instr(fn, mov);
 
             asm_instr_t *ret = calloc(1, sizeof(asm_instr_t));
@@ -120,9 +136,11 @@ static int asm_phase2(asm_program_t *program)
             case ASM_MOV: {
                 convert_pseudo(&instr->mov.src, pseudo_map, &next_offset);
                 convert_pseudo(&instr->mov.dst, pseudo_map, &next_offset);
+                break;
             }
             case ASM_UNARY: {
                 convert_pseudo(&instr->unary.dst, pseudo_map, &next_offset);
+                break;
             }
             default:
                 break;
@@ -134,7 +152,7 @@ static int asm_phase2(asm_program_t *program)
     return next_offset;
 }
 
-/* Phase 3: Insert allocate_stack, fix AST */
+/* Phase 3: Insert allocate_stack, fix memory-memory operations */
 
 static void asm_phase3(asm_program_t *program, int stack_offset)
 {
@@ -183,19 +201,68 @@ static void asm_phase3(asm_program_t *program, int stack_offset)
                     asm_instr_t *old = curr;
                     curr = mov2;
                     free(old);
+                    break;
                 }
             }
             default:
                 break;
         }
-        curr = curr->next;
         prev = curr;
+        curr = curr->next;
     }
 }
 
-void emit_x86(ir_program_t *ir)
+void emit_x86(ir_program_t *ir, FILE *file)
 {
     asm_program_t *program = asm_phase1(ir);
     int stack_offset = asm_phase2(program);
     asm_phase3(program, stack_offset);
+
+    asm_function_t *function = program->function;
+    asm_instr_t *instr = function->first;
+
+    fprintf(file, "    .globl %.*s\n", function->name_length, function->name);
+    fprintf(file, "%.*s:\n", function->name_length, function->name);
+    fprintf(file, "    pushq    %%rbp\n");
+    fprintf(file, "    movq     %%rsp, %%rbp\n");
+
+    while (instr) {
+        switch (instr->type) {
+            case ASM_ALLOCSTACK: {
+                fprintf(file, "    subq     $%d, %%rsp\n", instr->allocate_stack.val);
+                break;
+            }
+            case ASM_MOV: {
+                operand_t src = instr->mov.src;
+                operand_t dst = instr->mov.dst;
+
+                fprintf(file, "    movl     ");
+                EMIT_OPERAND(file, src);
+                fprintf(file, ", ");
+                EMIT_OPERAND(file, dst);
+                fprintf(file, "\n");
+                break;
+            }
+            case ASM_UNARY: {
+                const char *op = NULL;
+                switch (instr->unary.op) {
+                    case ASM_OP_NEG: op = "negl"; break;
+                    case ASM_OP_NOT: op = "notl"; break;
+                    default:         op = "???";  break;
+                }
+                fprintf(file, "    %s     ", op);
+                EMIT_OPERAND(file, instr->unary.dst);
+                fprintf(file, "\n");
+                break;
+            }
+            case ASM_RET: {
+                fprintf(file, "    movq     %%rbp, %%rsp\n");
+                fprintf(file, "    popq     %%rbp\n");
+                fprintf(file, "    ret\n");
+            }
+        }
+        instr = instr->next;
+    }
+    
+    fprintf(file, "\n    .section .note.GNU-stack,\"\",@progbits\n");
 }

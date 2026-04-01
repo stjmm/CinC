@@ -1,6 +1,8 @@
 #ifndef CINC_X86_H
 #define CINC_X86_H
 
+#include <stdio.h>
+
 #include "ir.h"
 
 /* ASM Operands */
@@ -54,6 +56,6 @@ typedef struct {
     asm_function_t *function;
 } asm_program_t;
 
-void emit_x86(ir_program_t *ir);
+void emit_x86(ir_program_t *ir, FILE *file);
 
 #endif

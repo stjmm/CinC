@@ -2,6 +2,7 @@
 
 #include "parser.h"
 #include "ir.h"
+#include "x86.h"
 
 int main(int argc, char **argv)
 {
@@ -16,5 +17,14 @@ int main(int argc, char **argv)
     }
     ast_print(root, 0);
 
+    /* IR */
     ir_program_t *ir = tacky_build(root);
+
+    /* CODEGEN */
+    FILE *file = fopen("a.s", "w");
+    emit_x86(ir, file);
+
+    fclose(file);
+
+    return 0;
 }
