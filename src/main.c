@@ -16,5 +16,5 @@ int main(int argc, char **argv)
     }
     ast_print(root, 0);
 
-    ir_program_t *ir = tacky_emit(root);
+    ir_program_t *ir = tacky_build(root);
 }

@@ -26,7 +26,7 @@ void ast_print(ast_node_t *node, int depth)
             INDENT(); printf(")\n");
             break;
         case AST_UNARY:
-            INDENT(); printf("(unary %.*s\n", (int)node->token.length, node->token.start);
+            INDENT(); printf("(unary '%.*s\n", (int)node->token.length, node->token.start);
             ast_print(node->unary.expr, depth + 1);
             INDENT(); printf(")\n");
             break;

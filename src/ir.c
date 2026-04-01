@@ -89,7 +89,7 @@ static ir_function_t *emit_function(ast_node_t *fn_node)
     return fn;
 }
 
-ir_program_t *tacky_emit(ast_node_t *root)
+ir_program_t *tacky_build(ast_node_t *root)
 {
     ir_program_t *program = calloc(1, sizeof(ir_program_t));
     program->function = emit_function(root->program.first);

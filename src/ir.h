@@ -4,7 +4,8 @@
 #include "ast.h"
 
 /*
- * This IR is based on the "Tacky IR" defined in the book "Writing a Compiler in C"
+ * Based on Three-Address Representation "TACKY"
+ * from "Writing a C Compiler" by Nora Sandler
  */
 
 /* IR Value */
@@ -48,6 +49,6 @@ typedef struct {
     ir_function_t *function;   
 } ir_program_t;
 
-ir_program_t *tacky_emit(ast_node_t *root);
+ir_program_t *tacky_build(ast_node_t *root);
 
 #endif
