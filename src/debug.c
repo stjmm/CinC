@@ -2,6 +2,34 @@
 
 #include "ast.h"
 
+static void print_expr(ast_node_t *node)
+{
+    if (!node) return;
+
+    switch (node->kind) {
+        case AST_CONSTANT:
+            printf("%ld", node->constant.value);
+            break;
+        case AST_IDENTIFIER:
+            break;
+        case AST_UNARY:
+            printf("(%.*s ", (int)node->token.length, node->token.start);
+            print_expr(node->unary.expr);
+            printf(")");
+            break;
+        case AST_BINARY:
+            printf("(%.*s ", (int)node->token.length, node->token.start);
+            print_expr(node->binary.left);
+            printf(" ");
+            print_expr(node->binary.right);
+            printf(")");
+            break;
+        default:
+            printf("<expr?>");
+            break;
+    }
+}
+
 void ast_print(ast_node_t *node, int depth)
 {
     if (!node) return;
@@ -16,19 +44,26 @@ void ast_print(ast_node_t *node, int depth)
             INDENT(); printf("(ident %.*s)\n", (int)node->token.length, node->token.start);
             break;
         case AST_EXPR_STMT:
-            INDENT(); printf("(expr_stmt\n");
+            INDENT(); printf("(expr_stmt ");
             ast_print(node->expr_stmt.expr, depth + 1);
-            INDENT(); printf(")\n");
+            printf(")\n");
             break;
         case AST_RETURN:
-            INDENT(); printf("(return_stmt\n");
-            ast_print(node->return_stmt.expr, depth + 1);
-            INDENT(); printf(")\n");
+            INDENT(); printf("(return_stmt ");
+            print_expr(node->return_stmt.expr);
+            printf(")\n");
             break;
         case AST_UNARY:
-            INDENT(); printf("(unary '%.*s\n", (int)node->token.length, node->token.start);
-            ast_print(node->unary.expr, depth + 1);
-            INDENT(); printf(")\n");
+            INDENT(); printf("(%.*s ", (int)node->token.length, node->token.start);
+            print_expr(node->unary.expr);
+            printf(")\n");
+            break;
+        case AST_BINARY:
+            INDENT(); printf("(%.*s ", (int)node->token.length, node->token.start);
+            print_expr(node->binary.left);
+            printf(" ");
+            print_expr(node->binary.right);
+            printf(")\n");
             break;
         case AST_BLOCK:
             INDENT(); printf("(block\n");

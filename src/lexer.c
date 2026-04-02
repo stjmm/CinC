@@ -139,9 +139,15 @@ token_t lexer_next_token()
         case ')': return make_token(TOKEN_RIGHT_PAREN);
         case '{': return make_token(TOKEN_LEFT_BRACE);
         case '}': return make_token(TOKEN_RIGHT_BRACE);
+        case '+':
+            if (match('+')) return make_token(TOKEN_PLUS_PLUS);
+            else return make_token(TOKEN_PLUS);
         case '-':
             if (match('-')) return make_token(TOKEN_MINUS_MINUS);
             else return make_token(TOKEN_MINUS);
+        case '*': return make_token(TOKEN_STAR);
+        case '/': return make_token(TOKEN_SLASH);
+        case '%': return make_token(TOKEN_PERCENT);
         case '~': return make_token(TOKEN_TILDE);
         case ';': return make_token(TOKEN_SEMICOLON);
     }

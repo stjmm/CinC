@@ -14,12 +14,24 @@ static ir_val_t make_temp(void)
     return (ir_val_t){ .kind = IR_VAL_VAR, .var_id = id++ };
 }
 
-static ir_op_e convert_unop(token_t tok)
+static ir_unary_op_e convert_unop(token_t tok)
 {
     switch (tok.type) {
-        case TOKEN_MINUS: return OP_NEGATE;
-        case TOKEN_TILDE: return OP_COMPLEMENT;
-        default: fprintf(stderr, "unknown op\n"); exit(1);
+        case TOKEN_MINUS: return IR_OP_NEGATE;
+        case TOKEN_TILDE: return IR_OP_COMPLEMENT;
+        default: fprintf(stderr, "unknown unop\n"); exit(1);
+    }
+}
+
+static ir_binary_op_e convert_binop(token_t tok)
+{
+    switch (tok.type) {
+        case TOKEN_PLUS: return IR_OP_ADD;
+        case TOKEN_MINUS: return IR_OP_SUBTRACT;
+        case TOKEN_STAR: return IR_OP_MULTIPLY;
+        case TOKEN_SLASH: return IR_OP_DIVIDE;
+        case TOKEN_PERCENT: return IR_OP_REMAINDER;
+        default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
 }
 
@@ -49,6 +61,22 @@ static ir_val_t emit_expr(ast_node_t *expr, ir_function_t *fn)
             };
             append_instr(fn, instr);
             return dst;
+        }
+        case AST_BINARY: {
+            ir_val_t v1 = emit_expr(expr->binary.left, fn);
+            ir_val_t v2 = emit_expr(expr->binary.right, fn);
+            ir_val_t dst = make_temp();
+
+            ir_instr_t *instr = calloc(1, sizeof(ir_instr_t));
+            *instr = (ir_instr_t){
+                .type = IR_BINARY,
+                .binary.op = convert_binop(expr->token),
+                .binary.src1 = v1,
+                .binary.src2 = v2,
+                .binary.dst = dst,
+            };
+            append_instr(fn, instr);
+            break;
         }
         default:
             fprintf(stderr, "tacky_emit: unhandled expr kind\n");

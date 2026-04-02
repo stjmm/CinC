@@ -14,13 +14,15 @@
     X(TOKEN_RIGHT_BRACKET)        \
     X(TOKEN_SEMICOLON)            \
     /* One or two char tokens */  \
-    X(TOKEN_MINUS)                \
-    X(TOKEN_MINUS_MINUS)          \
     X(TOKEN_PLUS)                 \
+    X(TOKEN_MINUS)                \
     X(TOKEN_STAR)                 \
     X(TOKEN_SLASH)                \
     X(TOKEN_TILDE)                \
+    X(TOKEN_PERCENT)              \
     X(TOKEN_EQUAL)                \
+    X(TOKEN_MINUS_MINUS)          \
+    X(TOKEN_PLUS_PLUS)            \
     /* Literals */                \
     X(TOKEN_IDENTIFIER)           \
     X(TOKEN_NUMBER)               \

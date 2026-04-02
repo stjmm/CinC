@@ -14,6 +14,7 @@
     X(AST_CONSTANT)     \
     X(AST_IDENTIFIER)   \
     X(AST_UNARY)        \
+    X(AST_BINARY)       \
     /* Statements */    \
     X(AST_EXPR_STMT)    \
     X(AST_RETURN)       \
@@ -38,6 +39,7 @@ struct ast_node_t {
         struct { long value; } constant;
         struct {} identifier;
         struct { ast_node_t *expr; } unary;
+        struct { ast_node_t *left; ast_node_t *right; } binary;
         struct { ast_node_t *expr; } expr_stmt;
         struct { ast_node_t *expr; } return_stmt;
         struct { ast_node_t *first; } block;

@@ -19,9 +19,18 @@
 
 /* Phase 1: Convert TACKY IR to ASM AST. Keeps temporary variables (pseduos) */
 
-static operator_e convert_op(ir_op_e op)
+static operator_e convert_unop(ir_unary_op_e op)
 {
-    return (op == OP_NEGATE ? ASM_OP_NEG : ASM_OP_NOT);
+    return (op == IR_OP_NEGATE ? ASM_OP_NEG : ASM_OP_NOT);
+}
+
+static operator_e convert_binop(ir_binary_op_e op)
+{
+    operator_e operator;
+    if (op == IR_OP_ADD) operator = ASM_OP_ADD;
+    if (op == IR_OP_SUBTRACT) operator = ASM_OP_SUB;
+    if (op == IR_OP_MULTIPLY) operator = ASM_OP_MULT;
+    return operator;
 }
 
 static operand_t convert_val(ir_val_t v)
@@ -44,6 +53,15 @@ static void append_instr(asm_function_t *fn, asm_instr_t *instr)
     if (!fn->last) fn->first = instr;
     else fn->last->next = instr;
     fn->last = instr;
+}
+
+static asm_instr_t *make_mov(operand_t src, operand_t dst)
+{
+    asm_instr_t *instr = calloc(1, sizeof(asm_instr_t));
+    instr->type = ASM_MOV;
+    instr->mov.src = src;
+    instr->mov.dst = dst;
+    return instr;
 }
 
 static void emit_instr(asm_function_t *fn, ir_instr_t *instr)
@@ -76,10 +94,57 @@ static void emit_instr(asm_function_t *fn, ir_instr_t *instr)
 
             asm_instr_t *unary = calloc(1, sizeof(asm_instr_t));
             unary->type = ASM_UNARY;
-            unary->unary.op = convert_op(instr->unary.op);
+            unary->unary.op = convert_unop(instr->unary.op);
             unary->unary.dst = dst;
             append_instr(fn, unary);
 
+            break;
+        }
+        case IR_BINARY: {
+            operand_t src1 = convert_val(instr->binary.src1);
+            operand_t src2 = convert_val(instr->binary.src2);
+            operand_t dst = convert_val(instr->binary.dst);
+
+            // Special case for division and remainder
+            // Converts Binary to Mov(src, AX), Cdq, Idiv(src), Mov(AX/DX, dst)
+            if (instr->binary.op == IR_OP_DIVIDE || instr->binary.op == IR_OP_REMAINDER) {
+                asm_instr_t *mov1 = calloc(1, sizeof(asm_instr_t));
+                mov1->type = ASM_MOV;
+                mov1->mov.src = src1;
+                mov1->mov.dst.reg = REG_AX;
+                append_instr(fn, mov1);
+
+                asm_instr_t *cdq = calloc(1, sizeof(asm_instr_t));
+                cdq->type = ASM_CDQ;
+                append_instr(fn, cdq);
+
+                asm_instr_t *idiv = calloc(1, sizeof(asm_instr_t));
+                idiv->type = ASM_IDIV;
+                idiv->idiv.operand = src2;
+                append_instr(fn, idiv);
+
+                asm_instr_t *mov2 = calloc(1, sizeof(asm_instr_t));
+                mov2->type = ASM_MOV;
+                mov2->mov.src.reg = instr->binary.op == IR_OP_DIVIDE ? REG_AX : REG_DX;
+                mov2->mov.dst = dst;
+                append_instr(fn, mov2);
+                break;
+            }
+
+            // Converts IR Binary(op, src1, src2, dst)
+            // into ASM Mov(src1, dst) and Binary(op, src2, dst)
+            asm_instr_t *mov = calloc(1, sizeof(asm_instr_t));
+            mov->type = ASM_MOV;
+            mov->mov.src = src1;
+            mov->mov.dst = dst;
+            append_instr(fn, mov);
+
+            asm_instr_t *binary = calloc(1, sizeof(asm_instr_t));
+            binary->type = ASM_BINARY;
+            binary->binary.op = convert_binop(instr->binary.op);
+            binary->binary.src = src2;
+            binary->binary.dst = dst;
+            append_instr(fn, binary);
             break;
         }
     }
@@ -133,15 +198,17 @@ static int asm_phase2(asm_program_t *program)
     asm_instr_t *instr = function->first;
     while(instr) {
         switch (instr->type) {
-            case ASM_MOV: {
+            case ASM_MOV:
                 convert_pseudo(&instr->mov.src, pseudo_map, &next_offset);
                 convert_pseudo(&instr->mov.dst, pseudo_map, &next_offset);
                 break;
-            }
-            case ASM_UNARY: {
+            case ASM_UNARY:
                 convert_pseudo(&instr->unary.dst, pseudo_map, &next_offset);
                 break;
-            }
+            case ASM_BINARY:
+                convert_pseudo(&instr->binary.src, pseudo_map, &next_offset);
+                convert_pseudo(&instr->binary.dst, pseudo_map, &next_offset);
+                break;
             default:
                 break;
         }
@@ -153,6 +220,14 @@ static int asm_phase2(asm_program_t *program)
 }
 
 /* Phase 3: Insert allocate_stack, fix memory-memory operations */
+
+static asm_instr_t *splice_replace(asm_function_t *fn, asm_instr_t *prev,
+                                   asm_instr_t *curr, asm_instr_t *chain_first,
+                                   asm_instr_t *chain_last)
+{
+    chain_last = curr->next;
+    if (prevc)
+}
 
 static void asm_phase3(asm_program_t *program, int stack_offset)
 {

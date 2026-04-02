@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "parser.h"
+#include "ast.h"
 #include "lexer.h"
 
 typedef struct {
@@ -96,6 +97,7 @@ static bool match(token_type_e type)
 /* Expression parsing (Pratt) */
 
 static ast_node_t *parse_expression(precedence_e prec);
+static parse_rule_t *get_rule(token_type_e type);
 
 static ast_node_t *number(void)
 {
@@ -122,6 +124,15 @@ static ast_node_t *grouping(void)
     return expr;
 }
 
+static ast_node_t *binary(ast_node_t *left)
+{
+    token_t op = parser.previous;
+    parse_rule_t *rule = get_rule(op.type);
+    ast_node_t *right = parse_expression(rule->precedence + 1);
+    if (!right) return NULL;
+    return AST_NEW(AST_BINARY, op, .binary.left = left, .binary.right = right);
+}
+
 static parse_rule_t parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
@@ -130,11 +141,12 @@ static parse_rule_t parse_rules[] = {
     [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
     [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
-    [TOKEN_MINUS]         = {unary, NULL, PREC_UNARY},
+    [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
     [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
-    [TOKEN_PLUS]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_STAR]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_SLASH]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
+    [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
+    [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
+    [TOKEN_PERCENT]       = {NULL, binary, PREC_TERM},
     [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
     [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
     [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},

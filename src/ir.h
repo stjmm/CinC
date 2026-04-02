@@ -22,9 +22,10 @@ typedef struct {
 
 /* IR Instructions */
 
-typedef enum { OP_NEGATE, OP_COMPLEMENT } ir_op_e;
+typedef enum { IR_OP_NEGATE, IR_OP_COMPLEMENT } ir_unary_op_e;
+typedef enum { IR_OP_ADD, IR_OP_SUBTRACT, IR_OP_MULTIPLY, IR_OP_DIVIDE, IR_OP_REMAINDER } ir_binary_op_e;
 
-typedef enum { IR_RETURN, IR_UNARY } ir_type_e;
+typedef enum { IR_RETURN, IR_UNARY, IR_BINARY } ir_type_e;
 
 typedef struct ir_instr_t ir_instr_t;
 struct ir_instr_t {
@@ -32,7 +33,8 @@ struct ir_instr_t {
     ir_instr_t *next; // For linked-list of instructions in a function
     union {
         struct { ir_val_t src; } ret;
-        struct { ir_op_e op; ir_val_t src; ir_val_t dst; } unary;
+        struct { ir_unary_op_e op; ir_val_t src; ir_val_t dst; } unary;
+        struct { ir_binary_op_e op; ir_val_t src1; ir_val_t src2; ir_val_t dst; } binary;
     };
 };
 
@@ -46,7 +48,7 @@ typedef struct {
 } ir_function_t;
 
 typedef struct {
-    ir_function_t *function;   
+    ir_function_t *function;
 } ir_program_t;
 
 ir_program_t *tacky_build(ast_node_t *root);
