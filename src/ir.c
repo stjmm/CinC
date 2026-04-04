@@ -14,11 +14,18 @@ static struct ir_val make_temp(void)
     return (struct ir_val){ .type = IR_VAL_VAR, .var_id = id++ };
 }
 
+static int make_label(void)
+{
+    static int label_id = 0;
+    return label_id++;
+}
+
 static enum ir_unary_op convert_unop(struct token tok)
 {
     switch (tok.type) {
         case TOKEN_MINUS: return IR_NEGATE;
         case TOKEN_TILDE: return IR_COMPLEMENT;
+        case TOKEN_BANG:  return IR_NOT;
         default: fprintf(stderr, "unknown unop\n"); exit(1);
     }
 }
@@ -26,11 +33,17 @@ static enum ir_unary_op convert_unop(struct token tok)
 static enum ir_binary_op convert_binop(struct token tok)
 {
     switch (tok.type) {
-        case TOKEN_PLUS:    return IR_ADD;
-        case TOKEN_MINUS:   return IR_SUBTRACT;
-        case TOKEN_STAR:    return IR_MULTIPLY;
-        case TOKEN_SLASH:   return IR_DIVIDE;
-        case TOKEN_PERCENT: return IR_REMAINDER;
+        case TOKEN_PLUS:          return IR_ADD;
+        case TOKEN_MINUS:         return IR_SUBTRACT;
+        case TOKEN_STAR:          return IR_MULTIPLY;
+        case TOKEN_SLASH:         return IR_DIVIDE;
+        case TOKEN_PERCENT:       return IR_REMAINDER;
+        case TOKEN_EQUAL_EQUAL:   return IR_EQUAL;
+        case TOKEN_BANG_EQUAL:    return IR_NOT_EQUAL;
+        case TOKEN_LESS:          return IR_LESS;
+        case TOKEN_LESS_EQUAL:    return IR_LESS_EQUAL;
+        case TOKEN_GREATER:       return IR_LESS_EQUAL;
+        case TOKEN_GREATER_EQUAL: return IR_GREATER_EQUAL;
         default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
 }

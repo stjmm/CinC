@@ -19,6 +19,10 @@ typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
 enum precedence {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
+    PREC_OR,         // ||
+    PREC_AND,        // &&
+    PREC_EQUALITY,   // == !=
+    PREC_COMPARISON, // < > <= >=
     PREC_TERM,       // -+
     PREC_FACTOR,     // */
     PREC_UNARY,      // ++x ! -
@@ -173,13 +177,25 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
     [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
     [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
-    [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
     [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
     [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
     [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
     [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
+    [TOKEN_BANG]          = {unary, NULL, PREC_NONE},
     [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
+    [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
+    [TOKEN_PLUS_PLUS]     = {NULL, NULL, PREC_UNARY},
     [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_EQUAL_EQUAL]   = {NULL, binary, PREC_EQUALITY},
+    [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
+    [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_LESS_EQUAL]    = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_GREATER]       = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_GREATER_EQUAL] = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_AND_AND]       = {NULL, binary, PREC_AND},
+    [TOKEN_OR_OR]         = {NULL, binary, PREC_OR},
+    [TOKEN_OR]            = {NULL, NULL, PREC_NONE},
+    [TOKEN_AND]           = {NULL, NULL, PREC_NONE},
     [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},
     [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},

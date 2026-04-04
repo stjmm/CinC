@@ -149,6 +149,24 @@ struct token lexer_next_token()
         case '/': return make_token(TOKEN_SLASH);
         case '%': return make_token(TOKEN_PERCENT);
         case '~': return make_token(TOKEN_TILDE);
+        case '=':
+            if (match('=')) return make_token(TOKEN_EQUAL_EQUAL);
+            else return make_token(TOKEN_EQUAL);
+        case '!':
+            if (match('=')) return make_token(TOKEN_BANG_EQUAL);
+            else return make_token(TOKEN_BANG);
+        case '&':
+            if (match('&')) return make_token(TOKEN_AND_AND);
+            else return make_token(TOKEN_AND);
+        case '|':
+            if (match('|')) return make_token(TOKEN_OR_OR);
+            else return make_token(TOKEN_OR);
+        case '<':
+            if (match('=')) return make_token(TOKEN_LESS_EQUAL);
+            else return make_token(TOKEN_LESS);
+        case '>':
+            if (match('=')) return make_token(TOKEN_GREATER_EQUAL);
+            else return make_token(TOKEN_GREATER);
         case ';': return make_token(TOKEN_SEMICOLON);
     }
 

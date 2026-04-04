@@ -22,9 +22,29 @@ struct ir_val {
 
 /* IR Instructions */
 
-enum ir_unary_op { IR_NEGATE, IR_COMPLEMENT };
-enum ir_binary_op { IR_ADD, IR_SUBTRACT, IR_MULTIPLY, IR_DIVIDE, IR_REMAINDER };
-enum ir_instr_type { IR_RETURN, IR_UNARY, IR_BINARY };
+enum ir_unary_op { IR_NEGATE, IR_COMPLEMENT, IR_NOT };
+enum ir_binary_op {
+    IR_ADD, IR_SUBTRACT,
+    IR_MULTIPLY,
+    IR_DIVIDE,
+    IR_REMAINDER,
+    IR_EQUAL,
+    IR_NOT_EQUAL,
+    IR_LESS,
+    IR_LESS_EQUAL,
+    IR_GREATER,
+    IR_GREATER_EQUAL,
+};
+enum ir_instr_type {
+    IR_RETURN,
+    IR_UNARY,
+    IR_BINARY,
+    IR_COPY,
+    IR_JUMP,
+    IR_JUMP_IF_ZERO,
+    IR_JUMP_IF_NOT_ZERO,
+    IR_LABEL
+};
 
 struct ir_instr {
     enum ir_instr_type type;
@@ -42,6 +62,16 @@ struct ir_instr {
             struct ir_val src2;
             struct ir_val dst;
         } binary;
+        struct {
+            struct ir_val src;
+            struct ir_val dst;
+        } copy;
+        struct { int label_id; } jump;
+        struct {
+            struct ir_val cond;
+            int label_id;
+        } cjump;
+        struct { int label_id; } label;
     };
 };
 
