@@ -6,19 +6,19 @@
 
 int main(int argc, char **argv)
 {
-    const char *program_source = "int main(void) \n{ return (~2 + 3 * 4); }\n";
+    const char *program_source = "int main(void) \n{ return (~2); }\n";
 
     /* LEXER PHASE */
 
     /* PARSER/AST PHASE */
-    ast_node_t *root = parse_program(program_source);
+    struct ast_node *root = parse_program(program_source);
     if (!root) {
         exit(1);
     }
     ast_print(root, 0);
 
     /* IR */
-    ir_program_t *ir = tacky_build(root);
+    struct ir_program *ir = tacky_build(root);
 
     /* CODEGEN */
     FILE *file = fopen("a.s", "w");

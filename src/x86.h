@@ -8,38 +8,38 @@
 /* ASM Operands */
 
 // Size agnostic registers
-typedef enum {
+enum reg {
     REG_AX,
     REG_DX,
     REG_R10,
     REG_R11,
-} asm_reg_e;
+};
 
-typedef enum {OPERAND_IMM, OPERAND_REG, OPERAND_PSEUDO, OPERAND_STACK } operand_type_e;
+enum operand_type { OPERAND_IMM, OPERAND_REG, OPERAND_PSEUDO, OPERAND_STACK };
 
-typedef struct {
-    operand_type_e type;
+struct operand {
+    enum operand_type type;
     union {
         int imm;
-        asm_reg_e reg;
-        int pseudo; // Refers to temporary variables produced in TACKY
-        int stack; // Location on the stack (eg. -4(%rbp))
+        enum reg reg;
+        int pseudo;     // Refers to temporary variables produced in TACKY
+        int stack;      // Location on the stack (eg. -4(%rbp))
     };
-} operand_t;
+};
 
 /* ASM Instruction */
 
-typedef enum {
-    // Binary
-    ASM_OP_NEG,
-    ASM_OP_NOT,
+enum asm_op {
     // Unary
-    ASM_OP_ADD,
-    ASM_OP_SUB,
-    ASM_OP_MULT,
-} operator_e;
+    ASM_ADD,
+    ASM_SUB,
+    ASM_IMUL,
+    // Binary
+    ASM_NEG,
+    ASM_NOT,
+};
 
-typedef enum { 
+enum asm_instr_type { 
     ASM_MOV,
     ASM_UNARY,
     ASM_BINARY,
@@ -47,17 +47,16 @@ typedef enum {
     ASM_CDQ,
     ASM_ALLOCSTACK,
     ASM_RET,
-} asm_type_e;
+};
 
-typedef struct asm_instr_t asm_instr_t;
-struct asm_instr_t {
-    asm_type_e type;
-    asm_instr_t *next;
+struct asm_instr {
+    enum asm_instr_type type;
+    struct asm_instr *next;
     union {
-        struct { operand_t src; operand_t dst; } mov;
-        struct { operator_e op; operand_t dst; } unary;
-        struct { operator_e op; operand_t src; operand_t dst; } binary;
-        struct { operand_t operand; } idiv;
+        struct { struct operand src; struct operand dst; } mov;
+        struct { enum asm_op op; struct operand dst; } unary;
+        struct { enum asm_op op; struct operand src; struct operand dst; } binary;
+        struct { struct operand idiv_operand; } idiv;
         struct { } cdq;
         struct { int val; } allocate_stack;
         struct { } ret;
@@ -66,17 +65,17 @@ struct asm_instr_t {
 
 /* ASM Function/Program */
 
-typedef struct {
+struct asm_function {
     const char *name;
     int name_length;
-    asm_instr_t *first;
-    asm_instr_t *last;
-} asm_function_t;
+    struct asm_instr *first;
+    struct asm_instr *last;
+};
 
-typedef struct {
-    asm_function_t *function;
-} asm_program_t;
+struct asm_program {
+    struct asm_function *function;
+};
 
-void emit_x86(ir_program_t *ir, FILE *file);
+void emit_x86(struct ir_program *ir, FILE *file);
 
 #endif

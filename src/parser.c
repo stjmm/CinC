@@ -5,17 +5,17 @@
 #include "ast.h"
 #include "lexer.h"
 
-typedef struct {
-    token_t current;
-    token_t previous;
+struct parser {
+    struct token current;
+    struct token previous;
     bool had_error;
     bool panic_mode;
-} parser_t;
+};
 
-typedef ast_node_t* (*prefix_parse_fn)(void);
-typedef ast_node_t* (*infix_parse_fn)(ast_node_t *);
+typedef struct ast_node* (*prefix_parse_fn)(void);
+typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
 
-typedef enum {
+enum precedence {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
     PREC_TERM,       // -+
@@ -23,42 +23,42 @@ typedef enum {
     PREC_UNARY,      // ++x ! -
     PREC_POSTFIX,    // () [] x++
     PREC_PRIMARY,
-} precedence_e;
+};
 
-typedef struct {
+struct parse_rule {
     prefix_parse_fn prefix;
     infix_parse_fn  infix;
-    precedence_e precedence;
-} parse_rule_t;
+    enum precedence prec;
+};
 
-static parser_t parser;
+static struct parser parser_state;
 
-static void error(token_t *tok, const char *message)
+static void error(struct token *tok, const char *message)
 {
-    if (parser.panic_mode) return;
-    parser.panic_mode = true;
+    if (parser_state.panic_mode) return;
+    parser_state.panic_mode = true;
 
-    parser.had_error = true;
+    parser_state.had_error = true;
 }
 
 static void advance(void)
 {
-    parser.previous = parser.current;
+    parser_state.previous = parser_state.current;
     for (;;) {
-        parser.current = lexer_next_token();
-        if (parser.current.type != TOKEN_ERROR) break;
+        parser_state.current = lexer_next_token();
+        if (parser_state.current.type != TOKEN_ERROR) break;
 
-        error(&parser.current, "Unexpected character");
+        error(&parser_state.current, "Unexpected character");
     }
 }
 
 static void synchronize(void)
 {
-    parser.panic_mode = false;
+    parser_state.panic_mode = false;
 
-    while (parser.current.type != TOKEN_EOF) {
-        if (parser.previous.type == TOKEN_SEMICOLON) return;
-        switch (parser.current.type) {
+    while (parser_state.current.type != TOKEN_EOF) {
+        if (parser_state.previous.type == TOKEN_SEMICOLON) return;
+        switch (parser_state.current.type) {
             case TOKEN_INT:
             case TOKEN_RETURN:
                 return;
@@ -70,22 +70,22 @@ static void synchronize(void)
     }
 }
 
-static bool check(token_type_e type)
+static bool check(enum token_type type)
 {
-    return parser.current.type == type;
+    return parser_state.current.type == type;
 }
 
-static void consume(token_type_e type, const char *message)
+static void consume(enum token_type type, const char *message)
 {
     if (check(type)) {
         advance();
         return;
     }
 
-    error(&parser.current, message);
+    error(&parser_state.current, message);
 }
 
-static bool match(token_type_e type)
+static bool match(enum token_type type)
 {
     if (check(type)) {
         advance();
@@ -96,44 +96,44 @@ static bool match(token_type_e type)
 
 /* Expression parsing (Pratt) */
 
-static ast_node_t *parse_expression(precedence_e prec);
-static parse_rule_t *get_rule(token_type_e type);
+static struct ast_node *parse_expression(enum precedence prec);
+static struct parse_rule *get_rule(enum token_type type);
 
-static ast_node_t *number(void)
+static struct ast_node *number(void)
 {
-    long value = strtol(parser.previous.start, NULL, 10);
+    long value = strtol(parser_state.previous.start, NULL, 10);
     return AST_NEW(
         AST_CONSTANT,
-        parser.previous,
+        parser_state.previous,
         .constant.value = value
     );
 }
 
-static ast_node_t *unary(void)
+static struct ast_node *unary(void)
 {
-    token_t op = parser.previous;
-    ast_node_t *expr = parse_expression(PREC_UNARY);
+    struct token op = parser_state.previous;
+    struct ast_node *expr = parse_expression(PREC_UNARY);
     if (!expr) return NULL;
     return AST_NEW(AST_UNARY, op, .unary.expr = expr);
 }
 
-static ast_node_t *grouping(void)
+static struct ast_node *grouping(void)
 {
-    ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+    struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after expression");
     return expr;
 }
 
-static ast_node_t *binary(ast_node_t *left)
+static struct ast_node *binary(struct ast_node *left)
 {
-    token_t op = parser.previous;
-    parse_rule_t *rule = get_rule(op.type);
-    ast_node_t *right = parse_expression(rule->precedence + 1);
+    struct token op = parser_state.previous;
+    struct parse_rule *rule = get_rule(op.type);
+    struct ast_node *right = parse_expression(rule->prec + 1);
     if (!right) return NULL;
     return AST_NEW(AST_BINARY, op, .binary.left = left, .binary.right = right);
 }
 
-static parse_rule_t parse_rules[] = {
+static struct parse_rule parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
@@ -157,43 +157,43 @@ static parse_rule_t parse_rules[] = {
     [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
 };
 
-static parse_rule_t *get_rule(token_type_e type)
+static struct parse_rule *get_rule(enum token_type type)
 {
     return &parse_rules[type];
 }
 
-static ast_node_t *parse_expression(precedence_e prec)
+static struct ast_node *parse_expression(enum precedence prec)
 {
     advance();
-    prefix_parse_fn prefix = get_rule(parser.previous.type)->prefix;
+    prefix_parse_fn prefix = get_rule(parser_state.previous.type)->prefix;
     if (!prefix) {
-        error(&parser.previous, "Expected expression");
+        error(&parser_state.previous, "Expected expression");
         return NULL;
     }
-    ast_node_t *left = prefix();
+    struct ast_node *left = prefix();
 
-    while (prec <= get_rule(parser.current.type)->precedence) {
+    while (prec <= get_rule(parser_state.current.type)->prec) {
         advance();
-        infix_parse_fn infix = get_rule(parser.previous.type)->infix;
+        infix_parse_fn infix = get_rule(parser_state.previous.type)->infix;
         left = infix(left);
     }
 
     return left;
 }
 
-static ast_node_t *parse_expr_stmt(void)
+static struct ast_node *parse_expr_stmt(void)
 {
-    ast_node_t *expr = parse_expression(PREC_ASSIGNMENT);
+    struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
     if (!expr) return NULL;
     consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
-    return AST_NEW(AST_EXPR_STMT, parser.previous, .expr_stmt.expr = expr);
+    return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
 }
 
-static ast_node_t *parse_statement(void)
+static struct ast_node *parse_statement(void)
 {
     if (match(TOKEN_RETURN)) {
-        token_t return_tok = parser.previous;
-        ast_node_t *expr = NULL;
+        struct token return_tok = parser_state.previous;
+        struct ast_node *expr = NULL;
         if (!match(TOKEN_SEMICOLON)) {
             expr = parse_expression(PREC_ASSIGNMENT);
             if (!expr) return NULL;
@@ -207,15 +207,15 @@ static ast_node_t *parse_statement(void)
     return parse_expr_stmt();
 }
 
-static ast_node_t *parse_block(void)
+static struct ast_node *parse_block(void)
 {
-    ast_node_t *block = AST_NEW(AST_BLOCK, parser.previous);
-    ast_node_t *tail = NULL;
+    struct ast_node *block = AST_NEW(AST_BLOCK, parser_state.previous);
+    struct ast_node *tail = NULL;
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-        ast_node_t *stmt = parse_statement();
+        struct ast_node *stmt = parse_statement();
         if (!stmt) {
-            if (parser.panic_mode) { synchronize(); continue; }
+            if (parser_state.panic_mode) { synchronize(); continue; }
         }
         
         if (!tail) block->block.first = stmt;
@@ -227,18 +227,18 @@ static ast_node_t *parse_block(void)
     return block;
 }
 
-static ast_node_t *parse_function(void)
+static struct ast_node *parse_function(void)
 {
-    token_t return_type = parser.previous;
+    struct token return_type = parser_state.previous;
     consume(TOKEN_IDENTIFIER, "Expected function name.");
-    token_t name = parser.previous;
+    struct token name = parser_state.previous;
 
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
     if (match(TOKEN_IDENTIFIER)) {}
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name.");
 
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
-    ast_node_t *body = parse_block();
+    struct ast_node *body = parse_block();
 
     return AST_NEW(AST_FUNCTION, name,
         .function.name = name,
@@ -246,28 +246,28 @@ static ast_node_t *parse_function(void)
         .function.body = body);
 }
 
-static ast_node_t *parse_declaration(void)
+static struct ast_node *parse_declaration(void)
 {
     if (match(TOKEN_INT)) {
         return parse_function();
     }
 
-    error(&parser.previous, "Expected declaration");
+    error(&parser_state.previous, "Expected declaration");
     return NULL;
 }
 
-ast_node_t *parse_program(const char *source)
+struct ast_node *parse_program(const char *source)
 {
     lexer_init(source);
     advance();
 
-    ast_node_t *program = AST_NEW(AST_PROGRAM, parser.previous);
-    ast_node_t *tail = NULL;
+    struct ast_node *program = AST_NEW(AST_PROGRAM, parser_state.previous);
+    struct ast_node *tail = NULL;
 
     while (!check(TOKEN_EOF)) {
-        ast_node_t *decl = parse_declaration();
+        struct ast_node *decl = parse_declaration();
         if (!decl) {
-            if (parser.panic_mode) { synchronize(); continue; }
+            if (parser_state.panic_mode) { synchronize(); continue; }
         }
 
         if (!tail) program->program.first = decl;
@@ -275,5 +275,5 @@ ast_node_t *parse_program(const char *source)
         tail = decl;
     }
 
-    return parser.had_error ? NULL : program;
+    return parser_state.had_error ? NULL : program;
 }

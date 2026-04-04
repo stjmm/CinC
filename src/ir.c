@@ -3,39 +3,39 @@
 
 #include "ir.h"
 
-static ir_val_t make_constant(long c) 
+static struct ir_val make_constant(long c) 
 {
-    return (ir_val_t){ .kind = IR_VAL_CONSTANT, .constant = c };
+    return (struct ir_val){ .type = IR_VAL_CONSTANT, .constant = c };
 }
 
-static ir_val_t make_temp(void)
+static struct ir_val make_temp(void)
 {
     static int id = 0;
-    return (ir_val_t){ .kind = IR_VAL_VAR, .var_id = id++ };
+    return (struct ir_val){ .type = IR_VAL_VAR, .var_id = id++ };
 }
 
-static ir_unary_op_e convert_unop(token_t tok)
+static enum ir_unary_op convert_unop(struct token tok)
 {
     switch (tok.type) {
-        case TOKEN_MINUS: return IR_OP_NEGATE;
-        case TOKEN_TILDE: return IR_OP_COMPLEMENT;
+        case TOKEN_MINUS: return IR_NEGATE;
+        case TOKEN_TILDE: return IR_COMPLEMENT;
         default: fprintf(stderr, "unknown unop\n"); exit(1);
     }
 }
 
-static ir_binary_op_e convert_binop(token_t tok)
+static enum ir_binary_op convert_binop(struct token tok)
 {
     switch (tok.type) {
-        case TOKEN_PLUS: return IR_OP_ADD;
-        case TOKEN_MINUS: return IR_OP_SUBTRACT;
-        case TOKEN_STAR: return IR_OP_MULTIPLY;
-        case TOKEN_SLASH: return IR_OP_DIVIDE;
-        case TOKEN_PERCENT: return IR_OP_REMAINDER;
+        case TOKEN_PLUS:    return IR_ADD;
+        case TOKEN_MINUS:   return IR_SUBTRACT;
+        case TOKEN_STAR:    return IR_MULTIPLY;
+        case TOKEN_SLASH:   return IR_DIVIDE;
+        case TOKEN_PERCENT: return IR_REMAINDER;
         default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
 }
 
-static void append_instr(ir_function_t *fn, ir_instr_t *instr)
+static void append_instr(struct ir_function *fn, struct ir_instr *instr)
 {
     if (!fn->first) fn->first = instr;
     else fn->last->next = instr;
@@ -43,17 +43,17 @@ static void append_instr(ir_function_t *fn, ir_instr_t *instr)
 }
 
 
-static ir_val_t emit_expr(ast_node_t *expr, ir_function_t *fn)
+static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
 {
-    switch (expr->kind) {
+    switch (expr->type) {
         case AST_CONSTANT:
             return make_constant(expr->constant.value);
         case AST_UNARY: {
-            ir_val_t src = emit_expr(expr->unary.expr, fn);
-            ir_val_t dst = make_temp();
+            struct ir_val src = emit_expr(expr->unary.expr, fn);
+            struct ir_val dst = make_temp();
 
-            ir_instr_t *instr = calloc(1, sizeof(ir_instr_t));
-            *instr = (ir_instr_t){
+            struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+            *instr = (struct ir_instr){
                 .type = IR_UNARY,
                 .unary.op = convert_unop(expr->token),
                 .unary.src = src,
@@ -63,12 +63,12 @@ static ir_val_t emit_expr(ast_node_t *expr, ir_function_t *fn)
             return dst;
         }
         case AST_BINARY: {
-            ir_val_t v1 = emit_expr(expr->binary.left, fn);
-            ir_val_t v2 = emit_expr(expr->binary.right, fn);
-            ir_val_t dst = make_temp();
+            struct ir_val v1 = emit_expr(expr->binary.left, fn);
+            struct ir_val v2 = emit_expr(expr->binary.right, fn);
+            struct ir_val dst = make_temp();
 
-            ir_instr_t *instr = calloc(1, sizeof(ir_instr_t));
-            *instr = (ir_instr_t){
+            struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+            *instr = (struct ir_instr){
                 .type = IR_BINARY,
                 .binary.op = convert_binop(expr->token),
                 .binary.src1 = v1,
@@ -76,7 +76,7 @@ static ir_val_t emit_expr(ast_node_t *expr, ir_function_t *fn)
                 .binary.dst = dst,
             };
             append_instr(fn, instr);
-            break;
+            return dst;
         }
         default:
             fprintf(stderr, "tacky_emit: unhandled expr kind\n");
@@ -84,13 +84,13 @@ static ir_val_t emit_expr(ast_node_t *expr, ir_function_t *fn)
     }
 }
 
-static void emit_stmt(ast_node_t *stmt, ir_function_t *fn)
+static void emit_stmt(struct ast_node *stmt, struct ir_function *fn)
 {
-    switch (stmt->kind) {
+    switch (stmt->type) {
         case AST_RETURN: {
-            ir_val_t src = emit_expr(stmt->return_stmt.expr, fn);
-            ir_instr_t *instr = calloc(1, sizeof(ir_instr_t));
-            *instr = (ir_instr_t){
+            struct ir_val src = emit_expr(stmt->return_stmt.expr, fn);
+            struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+            *instr = (struct ir_instr){
                 .type = IR_RETURN,
                 .ret.src = src
             };
@@ -103,13 +103,13 @@ static void emit_stmt(ast_node_t *stmt, ir_function_t *fn)
     }
 }
 
-static ir_function_t *emit_function(ast_node_t *fn_node)
+static struct ir_function *emit_function(struct ast_node *fn_node)
 {
-    ir_function_t *fn = calloc(1, sizeof(ir_function_t));
+    struct ir_function *fn = calloc(1, sizeof(struct ir_function));
     fn->name = fn_node->token.start;
     fn->name_length = fn_node->token.length;
 
-    ast_node_t *stmt = fn_node->function.body->block.first;
+    struct ast_node *stmt = fn_node->function.body->block.first;
     while (stmt) {
         emit_stmt(stmt, fn);
         stmt = stmt->next;
@@ -117,9 +117,9 @@ static ir_function_t *emit_function(ast_node_t *fn_node)
     return fn;
 }
 
-ir_program_t *tacky_build(ast_node_t *root)
+struct ir_program *tacky_build(struct ast_node *root)
 {
-    ir_program_t *program = calloc(1, sizeof(ir_program_t));
+    struct ir_program *program = calloc(1, sizeof(struct ir_program));
     program->function = emit_function(root->program.first);
     return program;
 }

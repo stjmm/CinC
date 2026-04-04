@@ -3,44 +3,44 @@
 
 #include "lexer.h"
 
-typedef struct {
+struct lexer {
     const char *start;
     const char *current;
     const char *line_start;
     int line;
-} lexer_t;
+};
 
-static lexer_t lexer;
+static struct lexer lexer_state;
 
 void lexer_init(const char *source)
 {
-    lexer.start = source;
-    lexer.current = source;
-    lexer.line_start = source;
-    lexer.line = 1;
+    lexer_state.start = source;
+    lexer_state.current = source;
+    lexer_state.line_start = source;
+    lexer_state.line = 1;
 }
 
 static bool is_at_end(void)
 {
-    return *lexer.current == '\0';
+    return *lexer_state.current == '\0';
 }
 
 static char advance(void)
 {
-    lexer.current++;
-    return lexer.current[-1];
+    lexer_state.current++;
+    return lexer_state.current[-1];
 }
 
 static char peek(void)
 {
-    return *lexer.current;
+    return *lexer_state.current;
 }
 
 static bool match(char expected)
 {
     if (is_at_end()) return false;
-    if (*lexer.current != expected) return false;
-    lexer.current++;
+    if (*lexer_state.current != expected) return false;
+    lexer_state.current++;
     return true;
 }
 
@@ -58,14 +58,14 @@ static bool is_digit(char c)
     return false;
 }
 
-static token_t make_token(token_type_e type)
+static struct token make_token(enum token_type type)
 {
-    token_t tok;
-    tok.start = lexer.start;
-    tok.length = lexer.current - lexer.start;
+    struct token tok;
+    tok.start = lexer_state.start;
+    tok.length = lexer_state.current - lexer_state.start;
     tok.type = type;
-    tok.line = lexer.line;
-    tok.line_start = lexer.line_start;
+    tok.line = lexer_state.line;
+    tok.line_start = lexer_state.line_start;
     return tok;
 }
 
@@ -82,8 +82,8 @@ static void skip_whitespace(void)
                 break;
             case '\n':
                 advance();
-                lexer.line++;
-                lexer.line_start = lexer.current;
+                lexer_state.line++;
+                lexer_state.line_start = lexer_state.current;
                 break;
             default:
                 return;
@@ -92,41 +92,41 @@ static void skip_whitespace(void)
 }
 
 // For now we only take ints
-static token_t number(void)
+static struct token number(void)
 {
     while (is_digit(peek())) advance();
     return make_token(TOKEN_NUMBER);
 }
 
-static token_type_e check_keyword(unsigned int start, unsigned int length,
-        const char *rest, token_type_e type)
+static enum token_type check_keyword(unsigned int start, unsigned int length,
+        const char *rest, enum token_type type)
 {
-    if (lexer.current - lexer.start == start + length &&
-            memcmp(lexer.start + start, rest, length) == 0) {
+    if (lexer_state.current - lexer_state.start == start + length &&
+            memcmp(lexer_state.start + start, rest, length) == 0) {
         return type;
     }
     return TOKEN_IDENTIFIER;
 }
 
-static token_type_e identifier_type(void)
+static enum token_type identifier_type(void)
 {
-    switch (lexer.start[0]) {
+    switch (lexer_state.start[0]) {
         case 'i': return check_keyword(1, 2, "nt", TOKEN_INT);
         case 'r': return check_keyword(1, 5, "eturn", TOKEN_RETURN);
     }
     return TOKEN_IDENTIFIER;
 }
 
-static token_t identifier(void)
+static struct token identifier(void)
 {
     while (is_alpha(peek()) || is_digit(peek())) advance();
     return make_token(identifier_type());
 }
 
-token_t lexer_next_token()
+struct token lexer_next_token()
 {
     skip_whitespace();
-    lexer.start = lexer.current;
+    lexer_state.start = lexer_state.current;
 
     if (is_at_end()) return make_token(TOKEN_EOF);
 

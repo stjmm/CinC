@@ -33,21 +33,21 @@
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  
 
-typedef enum {
+enum token_type {
 #define X(tok_name) tok_name,
     TOKEN_LIST
 #undef X
-} token_type_e;
+};
 
-typedef struct {
-    token_type_e type;
+struct token {
+    enum token_type type;
     const char *start;     
     size_t length;
     int line;
     const char *line_start; 
-} token_t;
+};
 
 void lexer_init(const char *source);
-token_t lexer_next_token(void);
+struct token lexer_next_token(void);
 
 #endif

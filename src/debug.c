@@ -2,11 +2,11 @@
 
 #include "ast.h"
 
-static void print_expr(ast_node_t *node)
+static void print_expr(struct ast_node *node)
 {
     if (!node) return;
 
-    switch (node->kind) {
+    switch (node->type) {
         case AST_CONSTANT:
             printf("%ld", node->constant.value);
             break;
@@ -30,13 +30,13 @@ static void print_expr(ast_node_t *node)
     }
 }
 
-void ast_print(ast_node_t *node, int depth)
+void ast_print(struct ast_node *node, int depth)
 {
     if (!node) return;
 
 #define INDENT() printf("%*s", depth * 2, "")
 
-    switch (node->kind) {
+    switch (node->type) {
         case AST_CONSTANT: 
             INDENT(); printf("(const %ld)\n", node->constant.value);
             break;
@@ -67,7 +67,7 @@ void ast_print(ast_node_t *node, int depth)
             break;
         case AST_BLOCK:
             INDENT(); printf("(block\n");
-            for (ast_node_t *n = node->block.first; n; n = n->next)
+            for (struct ast_node *n = node->block.first; n; n = n->next)
                 ast_print(n, depth + 1);
             INDENT(); printf(")\n");
             break;
@@ -80,7 +80,7 @@ void ast_print(ast_node_t *node, int depth)
             break;
         case AST_PROGRAM:
             INDENT(); printf("(program\n");
-            for (ast_node_t *n = node->program.first; n; n = n->next)
+            for (struct ast_node *n = node->program.first; n; n = n->next)
                 ast_print(n, depth + 1);
             INDENT(); printf(")\n");
             break;

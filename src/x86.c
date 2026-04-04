@@ -7,7 +7,7 @@
 
 #define EMIT_OPERAND(file, op)      \
     do {                            \
-        operand_t _o = (op);        \
+        struct operand _o = (op);        \
         if (_o.type == OPERAND_REG) \
             fprintf((file), "%%%s", reg_name_32(_o.reg)); \
         else if (_o.type == OPERAND_IMM) \
@@ -18,21 +18,21 @@
 
 /* Phase 1: Convert TACKY IR to ASM AST. Keeps temporary variables (pseduos) */
 
-static operator_e convert_unop(ir_unary_op_e op)
+static enum asm_op convert_unop(enum ir_unary_op op)
 {
-    return (op == IR_OP_NEGATE ? ASM_OP_NEG : ASM_OP_NOT);
+    return (op == IR_NEGATE ? ASM_NEG : ASM_NOT);
 }
 
-static operator_e convert_binop(ir_binary_op_e op)
+static enum asm_op convert_binop(enum ir_binary_op op)
 {
-    operator_e operator;
-    if (op == IR_OP_ADD) operator = ASM_OP_ADD;
-    if (op == IR_OP_SUBTRACT) operator = ASM_OP_SUB;
-    if (op == IR_OP_MULTIPLY) operator = ASM_OP_MULT;
+    enum asm_op operator;
+    if (op == IR_ADD)      operator = ASM_ADD;
+    if (op == IR_SUBTRACT) operator = ASM_SUB;
+    if (op == IR_MULTIPLY) operator = ASM_IMUL;
     return operator;
 }
 
-const char* reg_name_32(asm_reg_e r) {
+const char* reg_name_32(enum reg r) {
     switch (r) {
         case REG_AX:  return "eax";
         case REG_DX:  return "edx";
@@ -42,11 +42,11 @@ const char* reg_name_32(asm_reg_e r) {
     }
 }
 
-static operand_t convert_val(ir_val_t v)
+static struct operand convert_val(struct ir_val v)
 {
-    operand_t op = {0};
+    struct operand op = {0};
 
-    if (v.kind == IR_VAL_CONSTANT) {
+    if (v.type == IR_VAL_CONSTANT) {
         op.type = OPERAND_IMM;
         op.imm = v.constant;
     } else {
@@ -57,57 +57,50 @@ static operand_t convert_val(ir_val_t v)
     return op;
 }
 
-static void append_instr(asm_function_t *fn, asm_instr_t *instr)
+static struct operand reg_operand(enum reg r)
+{
+    return (struct operand){ .type = OPERAND_REG, .reg = r, };
+}
+
+static void append_instr(struct asm_function *fn, struct asm_instr *instr)
 {
     if (!fn->last) fn->first = instr;
     else fn->last->next = instr;
     fn->last = instr;
 }
 
-static void chain(asm_instr_t *a, asm_instr_t *b) { a->next = b; }
+static void chain_instr(struct asm_instr *a, struct asm_instr *b) { a->next = b; }
 
-static operand_t reg_operand(asm_reg_e r)
+static struct asm_instr *make_mov(struct operand src, struct operand dst)
 {
-    return (operand_t){ .type = OPERAND_REG, .reg = r, };
-}
-
-static asm_instr_t *make_mov(operand_t src, operand_t dst)
-{
-    asm_instr_t *instr = calloc(1, sizeof(asm_instr_t));
+    struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
     instr->type = ASM_MOV;
     instr->mov.src = src;
     instr->mov.dst = dst;
     return instr;
 }
 
-static void emit_instr(asm_function_t *fn, ir_instr_t *instr)
+static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
 {
     switch (instr->type) {
         case IR_RETURN: {
-            operand_t src = convert_val(instr->ret.src);
-            asm_instr_t *mov = calloc(1, sizeof(asm_instr_t));
-            mov->type = ASM_MOV;
-            mov->mov.src = src;
-            mov->mov.dst = reg_operand(REG_AX);
+            struct operand src = convert_val(instr->ret.src);
+            struct asm_instr *mov = make_mov(src, reg_operand(REG_AX));
             append_instr(fn, mov);
 
-            asm_instr_t *ret = calloc(1, sizeof(asm_instr_t));
+            struct asm_instr *ret = calloc(1, sizeof(struct asm_instr));
             ret->type = ASM_RET;
             append_instr(fn, ret);
-
             break;
         }
         case IR_UNARY: {
-            operand_t src = convert_val(instr->unary.src);
-            operand_t dst = convert_val(instr->unary.dst);
+            struct operand src = convert_val(instr->unary.src);
+            struct operand dst = convert_val(instr->unary.dst);
 
-            asm_instr_t *mov = calloc(1, sizeof(asm_instr_t));
-            mov->type = ASM_MOV;
-            mov->mov.src = src;
-            mov->mov.dst = dst;
+            struct asm_instr *mov = make_mov(src, dst);
             append_instr(fn, mov);
 
-            asm_instr_t *unary = calloc(1, sizeof(asm_instr_t));
+            struct asm_instr *unary = calloc(1, sizeof(struct asm_instr));
             unary->type = ASM_UNARY;
             unary->unary.op = convert_unop(instr->unary.op);
             unary->unary.dst = dst;
@@ -116,45 +109,37 @@ static void emit_instr(asm_function_t *fn, ir_instr_t *instr)
             break;
         }
         case IR_BINARY: {
-            operand_t src1 = convert_val(instr->binary.src1);
-            operand_t src2 = convert_val(instr->binary.src2);
-            operand_t dst = convert_val(instr->binary.dst);
+            struct operand src1 = convert_val(instr->binary.src1);
+            struct operand src2 = convert_val(instr->binary.src2);
+            struct operand dst = convert_val(instr->binary.dst);
 
             // Special case for division and remainder
             // Converts Binary to Mov(src, AX), Cdq, Idiv(src), Mov(AX/DX, dst)
-            if (instr->binary.op == IR_OP_DIVIDE || instr->binary.op == IR_OP_REMAINDER) {
-                asm_instr_t *mov1 = calloc(1, sizeof(asm_instr_t));
-                mov1->type = ASM_MOV;
-                mov1->mov.src = src1;
-                mov1->mov.dst = reg_operand(REG_AX);
+            if (instr->binary.op == IR_DIVIDE || instr->binary.op == IR_REMAINDER) {
+                struct asm_instr *mov1 = make_mov(src1, reg_operand(REG_AX));
                 append_instr(fn, mov1);
 
-                asm_instr_t *cdq = calloc(1, sizeof(asm_instr_t));
+                struct asm_instr *cdq = calloc(1, sizeof(struct asm_instr));
                 cdq->type = ASM_CDQ;
                 append_instr(fn, cdq);
 
-                asm_instr_t *idiv = calloc(1, sizeof(asm_instr_t));
+                struct asm_instr *idiv = calloc(1, sizeof(struct asm_instr));
                 idiv->type = ASM_IDIV;
-                idiv->idiv.operand = src2;
+                idiv->idiv.idiv_operand = src2;
                 append_instr(fn, idiv);
 
-                asm_instr_t *mov2 = calloc(1, sizeof(asm_instr_t));
-                mov2->type = ASM_MOV;
-                mov2->mov.src.reg = instr->binary.op == IR_OP_DIVIDE ? REG_AX : REG_DX;
-                mov2->mov.dst = dst;
+                struct operand result_reg = reg_operand(instr->binary.op == IR_DIVIDE ? REG_AX : REG_DX);
+                struct asm_instr *mov2 = make_mov(result_reg, dst);
                 append_instr(fn, mov2);
                 break;
             }
 
             // Converts IR Binary(op, src1, src2, dst)
             // into ASM Mov(src1, dst) and Binary(op, src2, dst)
-            asm_instr_t *mov = calloc(1, sizeof(asm_instr_t));
-            mov->type = ASM_MOV;
-            mov->mov.src = src1;
-            mov->mov.dst = dst;
+            struct asm_instr *mov = make_mov(src1, dst);
             append_instr(fn, mov);
 
-            asm_instr_t *binary = calloc(1, sizeof(asm_instr_t));
+            struct asm_instr *binary = calloc(1, sizeof(struct asm_instr));
             binary->type = ASM_BINARY;
             binary->binary.op = convert_binop(instr->binary.op);
             binary->binary.src = src2;
@@ -165,13 +150,13 @@ static void emit_instr(asm_function_t *fn, ir_instr_t *instr)
     }
 }
 
-static asm_function_t *emit_function(ir_function_t *fn)
+static struct asm_function *emit_function(struct ir_function *fn)
 {
-    asm_function_t *asm_fn = calloc(1, sizeof(asm_function_t));
+    struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
     asm_fn->name = fn->name;
     asm_fn->name_length = fn->name_length;
 
-    ir_instr_t *instr = fn->first;
+    struct ir_instr *instr = fn->first;
     while (instr) {
         emit_instr(asm_fn, instr);
         instr = instr->next;
@@ -179,38 +164,38 @@ static asm_function_t *emit_function(ir_function_t *fn)
     return asm_fn;
 }
 
-static asm_program_t *asm_phase1(ir_program_t *ir)
+static struct asm_program *asm_phase1(struct ir_program *ir)
 {
-    asm_program_t *program = calloc(1, sizeof(asm_program_t));
+    struct asm_program *program = calloc(1, sizeof(struct asm_program));
     program->function = emit_function(ir->function);
     return program;
 }
 
 /* Phase 2: Replace pseduo operands with stack operands */
 
-static void convert_pseudo(operand_t *op, int *map, int *next_offset)
+static void convert_pseudo(struct operand *oper, int *map, int *next_offset)
 {
-    if (op->type != OPERAND_PSEUDO)
+    if (oper->type != OPERAND_PSEUDO)
         return;
     
-    int id = op->pseudo;
+    int id = oper->pseudo;
 
     if (map[id] == 0) {
         *next_offset += 4;
         map[id] = -*next_offset;
     }
 
-    op->type = OPERAND_STACK;
-    op->stack = map[id];
+    oper->type = OPERAND_STACK;
+    oper->stack = map[id];
 }
 
-static int asm_phase2(asm_program_t *program)
+static int asm_phase2(struct asm_program *program)
 {
     int pseudo_map[64] = {0};
     int next_offset = 0;
 
-    asm_function_t *function = program->function;
-    asm_instr_t *instr = function->first;
+    struct asm_function *function = program->function;
+    struct asm_instr *instr = function->first;
     while(instr) {
         switch (instr->type) {
             case ASM_MOV:
@@ -234,9 +219,9 @@ static int asm_phase2(asm_program_t *program)
     return next_offset;
 }
 
-static asm_instr_t *replace_instr(asm_function_t *fn, asm_instr_t *prev,
-                                  asm_instr_t *curr, asm_instr_t *first_new,
-                                  asm_instr_t *last_new)
+static struct asm_instr *replace_instr(struct asm_function *fn, struct asm_instr *prev,
+        struct asm_instr *curr, struct asm_instr *first_new,
+        struct asm_instr *last_new)
 {
     last_new->next = curr->next;
 
@@ -250,22 +235,22 @@ static asm_instr_t *replace_instr(asm_function_t *fn, asm_instr_t *prev,
 }
 
 /* Phase 3: Insert allocate_stack, fix memory-memory operations */
-static void asm_phase3(asm_program_t *program, int stack_offset)
+static void asm_phase3(struct asm_program *program, int stack_offset)
 {
-    asm_function_t *fn = program->function;
+    struct asm_function *fn = program->function;
 
     // Insert allocate_stack at the beginning of function
-    asm_instr_t *alloc = calloc(1, sizeof(asm_instr_t));
+    struct asm_instr *alloc = calloc(1, sizeof(struct asm_instr));
     alloc->type = ASM_ALLOCSTACK;
     alloc->allocate_stack.val = stack_offset;
     alloc->next = fn->first;
     fn->first = alloc;
 
-    asm_instr_t *prev = NULL;
-    asm_instr_t *curr = fn->first;
+    struct asm_instr *prev = NULL;
+    struct asm_instr *curr = fn->first;
     
-    operand_t r10 = reg_operand(REG_R10);
-    operand_t r11 = reg_operand(REG_R11);
+    struct operand r10 = reg_operand(REG_R10);
+    struct operand r11 = reg_operand(REG_R11);
 
     while (curr) {
         switch (curr->type) {
@@ -275,9 +260,9 @@ static void asm_phase3(asm_program_t *program, int stack_offset)
                 if (curr->mov.src.type != OPERAND_STACK &&
                     curr->mov.dst.type != OPERAND_STACK) break;
 
-                asm_instr_t *m1 = make_mov(curr->mov.src, r10);
-                asm_instr_t *m2 = make_mov(r10, curr->mov.dst);
-                chain(m1, m2);
+                struct asm_instr *m1 = make_mov(curr->mov.src, r10);
+                struct asm_instr *m2 = make_mov(r10, curr->mov.dst);
+                chain_instr(m1, m2);
                 curr = replace_instr(fn, prev, curr, m1, m2);
                 break;
             }
@@ -286,28 +271,28 @@ static void asm_phase3(asm_program_t *program, int stack_offset)
             case ASM_BINARY: {
                 bool src_mem = curr->binary.src.type == OPERAND_STACK;
                 bool dst_mem = curr->binary.dst.type == OPERAND_STACK;
-                bool is_mul = curr->binary.op == ASM_OP_MULT;
+                bool is_mul = curr->binary.op == ASM_IMUL;
 
                 if (is_mul && dst_mem) {
                     // imull src, mem  ->  movl mem, %r11d / imull src, %r11d / movl %r11d, mem
-                    asm_instr_t *m1 = make_mov(curr->binary.dst, r11);
-                    asm_instr_t *op = calloc(1, sizeof(asm_instr_t));
+                    struct asm_instr *m1 = make_mov(curr->binary.dst, r11);
+                    struct asm_instr *op = calloc(1, sizeof(struct asm_instr));
                     op->type       = ASM_BINARY;
-                    op->binary.op  = ASM_OP_MULT;
+                    op->binary.op  = ASM_IMUL;
                     op->binary.src = curr->binary.src;
                     op->binary.dst = r11;
-                    asm_instr_t *m2 = make_mov(r11, curr->binary.dst);
-                    chain(m1, op); chain(op, m2);
+                    struct asm_instr *m2 = make_mov(r11, curr->binary.dst);
+                    chain_instr(m1, op); chain_instr(op, m2);
                     curr = replace_instr(fn, prev, curr, m1, m2);
                 } else if (!is_mul && src_mem && dst_mem) {
                     // addl/subl mem, mem  ->  movl src, %r10d / op %r10d, dst
-                    asm_instr_t *m1 = make_mov(curr->binary.src, r10);
-                    asm_instr_t *op = calloc(1, sizeof(asm_instr_t));
+                    struct asm_instr *m1 = make_mov(curr->binary.src, r10);
+                    struct asm_instr *op = calloc(1, sizeof(struct asm_instr));
                     op->type       = ASM_BINARY;
                     op->binary.op  = curr->binary.op;
                     op->binary.src = r10;
                     op->binary.dst = curr->binary.dst;
-                    chain(m1, op);
+                    chain_instr(m1, op);
                     curr = replace_instr(fn, prev, curr, m1, op);
                 }
                 break;
@@ -315,14 +300,15 @@ static void asm_phase3(asm_program_t *program, int stack_offset)
             
             // idiv $imm -> movl $imm, %r10d / idiv %r10d
             case ASM_IDIV: {
-                if (curr->idiv.operand.type != OPERAND_IMM) break;
+                if (curr->idiv.idiv_operand.type != OPERAND_IMM) break;
 
-                asm_instr_t *m1 = make_mov(curr->idiv.operand, r10);
-                asm_instr_t *idiv = calloc(1, sizeof(asm_instr_t));
+                struct asm_instr *m1 = make_mov(curr->idiv.idiv_operand, r10);
+                struct asm_instr *idiv = calloc(1, sizeof(struct asm_instr));
                 idiv->type = ASM_IDIV;
-                idiv->idiv.operand = r10;
-                chain(m1, idiv);
-                replace_instr(fn, prev, curr, idiv, m1);
+                idiv->idiv.idiv_operand = r10;
+                chain_instr(m1, idiv);
+                curr = replace_instr(fn, prev, curr, m1, idiv);
+                break;
             }
             default:
                 break;
@@ -332,14 +318,14 @@ static void asm_phase3(asm_program_t *program, int stack_offset)
     }
 }
 
-void emit_x86(ir_program_t *ir, FILE *file)
+void emit_x86(struct ir_program *ir, FILE *file)
 {
-    asm_program_t *program = asm_phase1(ir);
+    struct asm_program *program = asm_phase1(ir);
     int stack_offset = asm_phase2(program);
     asm_phase3(program, stack_offset);
 
-    asm_function_t *function = program->function;
-    asm_instr_t *instr = function->first;
+    struct asm_function *function = program->function;
+    struct asm_instr *instr = function->first;
 
     fprintf(file, "    .globl %.*s\n", function->name_length, function->name);
     fprintf(file, "%.*s:\n", function->name_length, function->name);
@@ -357,8 +343,8 @@ void emit_x86(ir_program_t *ir, FILE *file)
                 break;
             }
             case ASM_MOV: {
-                operand_t src = instr->mov.src;
-                operand_t dst = instr->mov.dst;
+                struct operand src = instr->mov.src;
+                struct operand dst = instr->mov.dst;
 
                 fprintf(file, "    movl     ");
                 EMIT_OPERAND(file, src);
@@ -370,8 +356,8 @@ void emit_x86(ir_program_t *ir, FILE *file)
             case ASM_UNARY: {
                 const char *op = NULL;
                 switch (instr->unary.op) {
-                    case ASM_OP_NEG: op = "negl"; break;
-                    case ASM_OP_NOT: op = "notl"; break;
+                    case ASM_NEG: op = "negl"; break;
+                    case ASM_NOT: op = "notl"; break;
                     default:         op = "???";  break;
                 }
                 fprintf(file, "    %s     ", op);
@@ -382,9 +368,9 @@ void emit_x86(ir_program_t *ir, FILE *file)
             case ASM_BINARY: {
                 const char *op = NULL;
                 switch(instr->binary.op) {
-                    case ASM_OP_ADD: op = "addl"; break;
-                    case ASM_OP_SUB: op = "subl"; break;
-                    case ASM_OP_MULT: op = "imull"; break;
+                    case ASM_ADD: op = "addl"; break;
+                    case ASM_SUB: op = "subl"; break;
+                    case ASM_IMUL: op = "imull"; break;
                     default: op = "???"; break;
                 }
                 fprintf(file, "    %s     ", op);
@@ -396,7 +382,7 @@ void emit_x86(ir_program_t *ir, FILE *file)
             }
             case ASM_IDIV: {
                 fprintf(file, "    idivl    ");
-                EMIT_OPERAND(file, instr->idiv.operand);
+                EMIT_OPERAND(file, instr->idiv.idiv_operand);
                 fprintf(file, "\n");
                 break;
             }
