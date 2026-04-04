@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "parser.h"
 #include "ast.h"
@@ -38,6 +39,20 @@ static void error(struct token *tok, const char *message)
     if (parser_state.panic_mode) return;
     parser_state.panic_mode = true;
 
+    int col = (int)(tok->start - tok->line_start);
+
+    fprintf(stderr, "Error at line %d, col %d: %s\n", tok->line, col, message);
+
+    const char *line_end = tok->line_start;
+    while (*line_end != '\0' && *line_end != '\n')
+        line_end++;
+    fprintf(stderr, "  %.*s\n", (int)(line_end - tok->line_start), tok->line_start);
+
+    fprintf(stderr, "  %*s", col, "");
+    for (size_t i = 0; i < (tok->length > 0 ? tok->length : 1); i++)
+        fputc('^', stderr);
+    fputc('\n', stderr);
+
     parser_state.had_error = true;
 }
 
@@ -52,7 +67,7 @@ static void advance(void)
     }
 }
 
-static void synchronize(void)
+static void synchronize_statement(void)
 {
     parser_state.panic_mode = false;
 
@@ -66,6 +81,22 @@ static void synchronize(void)
                 break;
         }
 
+        advance();
+    }
+}
+
+static void synchronize_declaration(void)
+{
+    parser_state.panic_mode = false;
+
+    while (parser_state.current.type != TOKEN_EOF) {
+        switch (parser_state.current.type) {
+            case TOKEN_INT:
+                return;
+            default:
+                break;
+        }
+        
         advance();
     }
 }
@@ -146,7 +177,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
     [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
     [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
-    [TOKEN_PERCENT]       = {NULL, binary, PREC_TERM},
+    [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
     [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
     [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
     [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},
@@ -215,7 +246,8 @@ static struct ast_node *parse_block(void)
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         struct ast_node *stmt = parse_statement();
         if (!stmt) {
-            if (parser_state.panic_mode) { synchronize(); continue; }
+            synchronize_statement();
+            continue;
         }
         
         if (!tail) block->block.first = stmt;
@@ -252,7 +284,7 @@ static struct ast_node *parse_declaration(void)
         return parse_function();
     }
 
-    error(&parser_state.previous, "Expected declaration");
+    error(&parser_state.current, "Expected declaration");
     return NULL;
 }
 
@@ -267,7 +299,8 @@ struct ast_node *parse_program(const char *source)
     while (!check(TOKEN_EOF)) {
         struct ast_node *decl = parse_declaration();
         if (!decl) {
-            if (parser_state.panic_mode) { synchronize(); continue; }
+            synchronize_declaration();
+            continue;
         }
 
         if (!tail) program->program.first = decl;
