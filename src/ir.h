@@ -24,7 +24,8 @@ struct ir_val {
 
 enum ir_unary_op { IR_NEGATE, IR_COMPLEMENT, IR_NOT };
 enum ir_binary_op {
-    IR_ADD, IR_SUBTRACT,
+    IR_ADD, 
+    IR_SUBTRACT,
     IR_MULTIPLY,
     IR_DIVIDE,
     IR_REMAINDER,
@@ -70,7 +71,11 @@ struct ir_instr {
         struct {
             struct ir_val cond;
             int label_id;
-        } cjump;
+        } jump_if_zero;
+        struct {
+            struct ir_val cond;
+            int label_id;
+        } jump_if_not_zero;
         struct { int label_id; } label;
     };
 };

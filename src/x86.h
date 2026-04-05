@@ -29,12 +29,19 @@ struct operand {
 
 /* ASM Instruction */
 
+enum cond_code {
+    COND_E,
+    COND_NE,
+    COND_G,
+    COND_GE,
+    COND_L,
+    COND_LE,
+};
+
 enum asm_op {
-    // Unary
     ASM_ADD,
     ASM_SUB,
     ASM_IMUL,
-    // Binary
     ASM_NEG,
     ASM_NOT,
 };
@@ -43,8 +50,13 @@ enum asm_instr_type {
     ASM_MOV,
     ASM_UNARY,
     ASM_BINARY,
+    ASM_CMP,
     ASM_IDIV,
     ASM_CDQ,
+    ASM_JMP,
+    ASM_JMPCC,
+    ASM_SETCC,
+    ASM_LABEL,
     ASM_ALLOCSTACK,
     ASM_RET,
 };
@@ -56,8 +68,13 @@ struct asm_instr {
         struct { struct operand src; struct operand dst; } mov;
         struct { enum asm_op op; struct operand dst; } unary;
         struct { enum asm_op op; struct operand src; struct operand dst; } binary;
+        struct { struct operand oper1; struct operand oper2; } cmp;
         struct { struct operand idiv_operand; } idiv;
         struct { } cdq;
+        struct { int identifier; } jmp;
+        struct { enum cond_code code; int identifier; } jmp_cc;
+        struct { enum cond_code code; struct operand oper; } set_cc;
+        struct { int identifier; } label;
         struct { int val; } allocate_stack;
         struct { } ret;
     };

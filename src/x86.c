@@ -20,7 +20,10 @@
 
 static enum asm_op convert_unop(enum ir_unary_op op)
 {
-    return (op == IR_NEGATE ? ASM_NEG : ASM_NOT);
+    enum asm_op operator;
+    if (op == IR_NEGATE)     operator = ASM_NEG;
+    if (op == IR_COMPLEMENT) operator = ASM_NOT;
+    return operator;
 }
 
 static enum asm_op convert_binop(enum ir_binary_op op)
@@ -62,6 +65,11 @@ static struct operand reg_operand(enum reg r)
     return (struct operand){ .type = OPERAND_REG, .reg = r, };
 }
 
+static struct operand make_imm_operand(int imm)
+{
+    return (struct operand){ .type = OPERAND_IMM, .imm = imm };
+}
+
 static void append_instr(struct asm_function *fn, struct asm_instr *instr)
 {
     if (!fn->last) fn->first = instr;
@@ -77,6 +85,15 @@ static struct asm_instr *make_mov(struct operand src, struct operand dst)
     instr->type = ASM_MOV;
     instr->mov.src = src;
     instr->mov.dst = dst;
+    return instr;
+}
+
+static struct asm_instr *make_cmp(struct operand oper1, struct operand oper2)
+{
+    struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
+    instr->type = ASM_CMP;
+    instr->cmp.oper1 = oper1;
+    instr->cmp.oper2 = oper2;
     return instr;
 }
 
@@ -117,21 +134,33 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             // Converts Binary to Mov(src, AX), Cdq, Idiv(src), Mov(AX/DX, dst)
             if (instr->binary.op == IR_DIVIDE || instr->binary.op == IR_REMAINDER) {
                 struct asm_instr *mov1 = make_mov(src1, reg_operand(REG_AX));
-                append_instr(fn, mov1);
 
                 struct asm_instr *cdq = calloc(1, sizeof(struct asm_instr));
                 cdq->type = ASM_CDQ;
-                append_instr(fn, cdq);
 
                 struct asm_instr *idiv = calloc(1, sizeof(struct asm_instr));
                 idiv->type = ASM_IDIV;
                 idiv->idiv.idiv_operand = src2;
+
+                append_instr(fn, mov1);
+                append_instr(fn, cdq);
                 append_instr(fn, idiv);
 
                 struct operand result_reg = reg_operand(instr->binary.op == IR_DIVIDE ? REG_AX : REG_DX);
                 struct asm_instr *mov2 = make_mov(result_reg, dst);
                 append_instr(fn, mov2);
                 break;
+            }
+
+            if (instr->binary.op == IR_LESS || instr->binary.op == IR_LESS_EQUAL ||
+                instr->binary.op == IR_GREATER || instr->binary.op == IR_GREATER_EQUAL) {
+                struct operand src1 = convert_val(instr->binary.src1);
+                struct operand src2 = convert_val(instr->binary.src2);
+                struct operand dst = convert_val(instr->binary.dst);
+
+                struct asm_instr *cmp = make_cmp(src2, src1);
+                append_instr(fn, cmp);
+
             }
 
             // Converts IR Binary(op, src1, src2, dst)
@@ -145,6 +174,32 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             binary->binary.src = src2;
             binary->binary.dst = dst;
             append_instr(fn, binary);
+            break;
+        }
+        case IR_JUMP_IF_ZERO: {
+            struct operand val = convert_val(instr->jump_if_zero.cond);
+            struct operand imm = make_imm_operand(0);
+            struct asm_instr *cmp = make_cmp(val, imm);
+            append_instr(fn, cmp);
+
+            struct asm_instr *jmp_cc = calloc(1, sizeof(struct asm_instr));
+            jmp_cc->type = ASM_JMPCC;
+            jmp_cc->jmp_cc.code = COND_E;
+            jmp_cc->jmp_cc.identifier = instr->jump_if_zero.label_id;
+            append_instr(fn, jmp_cc);
+            break;
+        }
+        case IR_JUMP_IF_NOT_ZERO: {
+            struct operand val = convert_val(instr->jump_if_not_zero.cond);
+            struct operand imm = make_imm_operand(0);
+            struct asm_instr *cmp = make_cmp(val, imm);
+            append_instr(fn, cmp);
+
+            struct asm_instr *jmp_cc = calloc(1, sizeof(struct asm_instr));
+            jmp_cc->type = ASM_JMPCC;
+            jmp_cc->jmp_cc.code = COND_NE;
+            jmp_cc->jmp_cc.identifier = instr->jump_if_not_zero.label_id;
+            append_instr(fn, jmp_cc);
             break;
         }
     }
