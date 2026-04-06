@@ -16,6 +16,17 @@
             fprintf((file), "%d(%%rbp)", _o.stack); \
     } while(0)
 
+#define EMIT_OPERAND_8(file, op)      \
+    do {                            \
+        struct operand _o = (op);        \
+        if (_o.type == OPERAND_REG) \
+            fprintf((file), "%%%s", reg_name_8(_o.reg)); \
+        else if (_o.type == OPERAND_IMM) \
+            fprintf((file), "$%d", _o.imm); \
+        else \
+            fprintf((file), "%d(%%rbp)", _o.stack); \
+    } while(0)
+
 /* Phase 1: Convert TACKY IR to ASM AST. Keeps temporary variables (pseduos) */
 
 static enum asm_op convert_unop(enum ir_unary_op op)
@@ -35,12 +46,49 @@ static enum asm_op convert_binop(enum ir_binary_op op)
     return operator;
 }
 
-const char* reg_name_32(enum reg r) {
+static enum cond_code convert_to_cond(enum ir_binary_op op)
+{
+    enum cond_code code;
+    if (op == IR_EQUAL)         code = COND_E;
+    if (op == IR_NOT_EQUAL)     code = COND_NE;
+    if (op == IR_LESS_EQUAL)    code = COND_LE;
+    if (op == IR_LESS)          code = COND_L;
+    if (op == IR_GREATER)       code = COND_G;
+    if (op == IR_GREATER_EQUAL) code = COND_GE;
+    return code;
+}
+
+const char *reg_name_32(enum reg r)
+{
     switch (r) {
         case REG_AX:  return "eax";
         case REG_DX:  return "edx";
         case REG_R10: return "r10d";
         case REG_R11: return "r11d";
+        default:      return "unknown";
+    }
+}
+
+const char *reg_name_8(enum reg r)
+{
+    switch (r) {
+        case REG_AX:  return "al";
+        case REG_DX:  return "dl";
+        case REG_R10: return "r10b";
+        case REG_R11: return "r11b";
+        default:      return "unknown";
+    }
+}
+
+const char *cond_suffix(enum cond_code c)
+{
+    switch (c) {
+        case COND_E:  return "e";
+        case COND_NE: return "ne";
+        case COND_L:  return "l";
+        case COND_LE: return "le";
+        case COND_G:  return "g";
+        case COND_GE: return "ge";
         default:      return "unknown";
     }
 }
@@ -60,7 +108,7 @@ static struct operand convert_val(struct ir_val v)
     return op;
 }
 
-static struct operand reg_operand(enum reg r)
+static struct operand make_reg_operand(enum reg r)
 {
     return (struct operand){ .type = OPERAND_REG, .reg = r, };
 }
@@ -102,7 +150,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
     switch (instr->type) {
         case IR_RETURN: {
             struct operand src = convert_val(instr->ret.src);
-            struct asm_instr *mov = make_mov(src, reg_operand(REG_AX));
+            struct asm_instr *mov = make_mov(src, make_reg_operand(REG_AX));
             append_instr(fn, mov);
 
             struct asm_instr *ret = calloc(1, sizeof(struct asm_instr));
@@ -113,6 +161,21 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
         case IR_UNARY: {
             struct operand src = convert_val(instr->unary.src);
             struct operand dst = convert_val(instr->unary.dst);
+
+            if (instr->unary.op == IR_NOT) {
+                struct asm_instr *cmp = make_cmp(make_imm_operand(0), src);
+                append_instr(fn, cmp);
+
+                struct asm_instr *mov = make_mov(make_imm_operand(0), dst);
+                append_instr(fn, mov);
+
+                struct asm_instr *set_cc = calloc(1, sizeof(struct asm_instr));
+                set_cc->type = ASM_SETCC;
+                set_cc->set_cc.code = COND_E;
+                set_cc->set_cc.oper = dst;
+                append_instr(fn, set_cc);
+                break;
+            }
 
             struct asm_instr *mov = make_mov(src, dst);
             append_instr(fn, mov);
@@ -133,7 +196,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             // Special case for division and remainder
             // Converts Binary to Mov(src, AX), Cdq, Idiv(src), Mov(AX/DX, dst)
             if (instr->binary.op == IR_DIVIDE || instr->binary.op == IR_REMAINDER) {
-                struct asm_instr *mov1 = make_mov(src1, reg_operand(REG_AX));
+                struct asm_instr *mov1 = make_mov(src1, make_reg_operand(REG_AX));
 
                 struct asm_instr *cdq = calloc(1, sizeof(struct asm_instr));
                 cdq->type = ASM_CDQ;
@@ -146,21 +209,27 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, cdq);
                 append_instr(fn, idiv);
 
-                struct operand result_reg = reg_operand(instr->binary.op == IR_DIVIDE ? REG_AX : REG_DX);
+                struct operand result_reg = make_reg_operand(instr->binary.op == IR_DIVIDE ? REG_AX : REG_DX);
                 struct asm_instr *mov2 = make_mov(result_reg, dst);
                 append_instr(fn, mov2);
                 break;
             }
 
-            if (instr->binary.op == IR_LESS || instr->binary.op == IR_LESS_EQUAL ||
+            if (instr->binary.op == IR_EQUAL || instr->binary.op == IR_NOT_EQUAL ||
+                instr->binary.op == IR_LESS || instr->binary.op == IR_LESS_EQUAL ||
                 instr->binary.op == IR_GREATER || instr->binary.op == IR_GREATER_EQUAL) {
-                struct operand src1 = convert_val(instr->binary.src1);
-                struct operand src2 = convert_val(instr->binary.src2);
-                struct operand dst = convert_val(instr->binary.dst);
-
                 struct asm_instr *cmp = make_cmp(src2, src1);
                 append_instr(fn, cmp);
 
+                struct asm_instr *mov = make_mov(make_imm_operand(0), dst);
+                append_instr(fn, mov);
+
+                struct asm_instr *set_cc = calloc(1, sizeof(struct asm_instr));
+                set_cc->type = ASM_SETCC;
+                set_cc->set_cc.code = convert_to_cond(instr->binary.op);
+                set_cc->set_cc.oper = dst;
+                append_instr(fn, set_cc);
+                break;
             }
 
             // Converts IR Binary(op, src1, src2, dst)
@@ -200,6 +269,28 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             jmp_cc->jmp_cc.code = COND_NE;
             jmp_cc->jmp_cc.identifier = instr->jump_if_not_zero.label_id;
             append_instr(fn, jmp_cc);
+            break;
+        }
+        case IR_JUMP: {
+            struct asm_instr *jump = calloc(1, sizeof(struct asm_instr));
+            jump->type = ASM_JMP;
+            jump->jmp.identifier = instr->jump.label_id;
+            append_instr(fn, jump);
+            break;
+        }
+        case IR_COPY: {
+            struct operand src = convert_val(instr->copy.src);
+            struct operand dst = convert_val(instr->copy.dst);
+
+            struct asm_instr *mov = make_mov(src, dst);
+            append_instr(fn, mov);
+            break;
+        }
+        case IR_LABEL: {
+            struct asm_instr *label = calloc(1, sizeof(struct asm_instr));
+            label->type = ASM_LABEL;
+            label->label.identifier = instr->label.label_id;
+            append_instr(fn, label);
             break;
         }
     }
@@ -304,8 +395,8 @@ static void asm_phase3(struct asm_program *program, int stack_offset)
     struct asm_instr *prev = NULL;
     struct asm_instr *curr = fn->first;
     
-    struct operand r10 = reg_operand(REG_R10);
-    struct operand r11 = reg_operand(REG_R11);
+    struct operand r10 = make_reg_operand(REG_R10);
+    struct operand r11 = make_reg_operand(REG_R11);
 
     while (curr) {
         switch (curr->type) {
@@ -363,6 +454,27 @@ static void asm_phase3(struct asm_program *program, int stack_offset)
                 idiv->idiv.idiv_operand = r10;
                 chain_instr(m1, idiv);
                 curr = replace_instr(fn, prev, curr, m1, idiv);
+                break;
+            }
+            case ASM_CMP: {
+                if (curr->cmp.oper1.type == OPERAND_STACK &&
+                    curr->cmp.oper2.type == OPERAND_STACK) {
+                    struct asm_instr *mov = make_mov(curr->cmp.oper1, r10);
+                    struct asm_instr *cmp = calloc(1, sizeof(struct asm_instr));
+                    cmp->type = ASM_CMP;
+                    cmp->cmp.oper1 = r10;
+                    cmp->cmp.oper2 = curr->cmp.oper2;
+                    chain_instr(mov, cmp);
+                    curr = replace_instr(fn, prev, curr, mov, cmp);
+                } else if (curr->cmp.oper2.type == OPERAND_IMM) {
+                    struct asm_instr *mov = make_mov(curr->cmp.oper2, r11);
+                    struct asm_instr *cmp = calloc(1, sizeof(struct asm_instr));
+                    cmp->type = ASM_CMP;
+                    cmp->cmp.oper1 = curr->cmp.oper1;
+                    cmp->cmp.oper2 = r11;
+                    chain_instr(mov, cmp);
+                    curr = replace_instr(fn, prev, curr, mov, cmp);
+                }
                 break;
             }
             default:
@@ -445,6 +557,37 @@ void emit_x86(struct ir_program *ir, FILE *file)
                 fprintf(file, "    movq     %%rbp, %%rsp\n");
                 fprintf(file, "    popq     %%rbp\n");
                 fprintf(file, "    ret\n");
+                break;
+            }
+            case ASM_CMP: {
+                fprintf(file, "    cmpl     ");
+                EMIT_OPERAND(file, instr->cmp.oper1);
+                fprintf(file, ", ");
+                EMIT_OPERAND(file, instr->cmp.oper2);
+                fprintf(file, "\n");
+                break;
+            }
+            case ASM_JMP: {
+                char l[10];
+                sprintf(l, ".L%d", instr->jmp.identifier);
+                fprintf(file, "    jmp    %s\n", l);
+                break;
+            }
+            case ASM_JMPCC: {
+                char l[10];
+                sprintf(l, ".L%d", instr->jmp.identifier);
+                fprintf(file, "    j%s    %s\n", cond_suffix(instr->jmp_cc.code), l);
+                break;
+            }
+            case ASM_SETCC: {
+                fprintf(file, "    j%s    \n", cond_suffix(instr->set_cc.code));
+                EMIT_OPERAND_8(file, instr->set_cc.oper);
+                break;
+            }
+            case ASM_LABEL: {
+                char l[10];
+                sprintf(l, ".L%d", instr->label.identifier);
+                fprintf(file, "%s:\n", l);
                 break;
             }
         }

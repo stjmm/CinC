@@ -43,7 +43,7 @@ static enum ir_binary_op convert_binop(struct token tok)
         case TOKEN_BANG_EQUAL:    return IR_NOT_EQUAL;
         case TOKEN_LESS:          return IR_LESS;
         case TOKEN_LESS_EQUAL:    return IR_LESS_EQUAL;
-        case TOKEN_GREATER:       return IR_LESS_EQUAL;
+        case TOKEN_GREATER:       return IR_GREATER_EQUAL;
         case TOKEN_GREATER_EQUAL: return IR_GREATER_EQUAL;
         default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
@@ -58,14 +58,14 @@ static void append_instr(struct ir_function *fn, struct ir_instr *instr)
 
 static void emit_copy(struct ir_function *fn, struct ir_val src, struct ir_val dst)
 {
-    struct ir_instr *i = calloc(1, sizeof(struct ir_val));
+    struct ir_instr *i = calloc(1, sizeof(struct ir_instr));
     *i = (struct ir_instr){ .type = IR_COPY, .copy.src = src, .copy.dst = dst };
     append_instr(fn, i);
 }
 
 static void emit_jump(struct ir_function *fn, int label_id)
 {
-    struct ir_instr *i = calloc(1, sizeof(struct ir_val));
+    struct ir_instr *i = calloc(1, sizeof(struct ir_instr));
     *i = (struct ir_instr){ .type = IR_JUMP, .jump.label_id = label_id };
     append_instr(fn, i);
 }
@@ -73,7 +73,7 @@ static void emit_jump(struct ir_function *fn, int label_id)
 static void emit_jump_cond(struct ir_function *fn, struct ir_val cond,
         int label_id, enum ir_instr_type type)
 {
-    struct ir_instr *i = calloc(1, sizeof(struct ir_val));
+    struct ir_instr *i = calloc(1, sizeof(struct ir_instr));
     if (type == IR_JUMP_IF_ZERO) {
         *i = (struct ir_instr){ .type = type, .jump_if_zero.cond = cond, .jump_if_zero.label_id = label_id};
     } else {
@@ -154,7 +154,7 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
                 return dst;
             }
 
-            // Standard case for binar operations (ADD, SUBTRACT ETC.)
+            // Standard case for binar operations
             struct ir_val v1 = emit_expr(expr->binary.left, fn);
             struct ir_val v2 = emit_expr(expr->binary.right, fn);
             struct ir_val dst = make_temp();
