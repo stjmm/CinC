@@ -355,6 +355,9 @@ static int asm_phase2(struct asm_program *program)
                 convert_pseudo(&instr->binary.src, pseudo_map, &next_offset);
                 convert_pseudo(&instr->binary.dst, pseudo_map, &next_offset);
                 break;
+            case ASM_SETCC:
+                convert_pseudo(&instr->set_cc.oper, pseudo_map, &next_offset);
+                break;
             default:
                 break;
         }
@@ -580,8 +583,9 @@ void emit_x86(struct ir_program *ir, FILE *file)
                 break;
             }
             case ASM_SETCC: {
-                fprintf(file, "    j%s    \n", cond_suffix(instr->set_cc.code));
+                fprintf(file, "    set%s    ", cond_suffix(instr->set_cc.code));
                 EMIT_OPERAND_8(file, instr->set_cc.oper);
+                fprintf(file, "\n");
                 break;
             }
             case ASM_LABEL: {

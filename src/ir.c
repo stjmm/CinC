@@ -43,7 +43,7 @@ static enum ir_binary_op convert_binop(struct token tok)
         case TOKEN_BANG_EQUAL:    return IR_NOT_EQUAL;
         case TOKEN_LESS:          return IR_LESS;
         case TOKEN_LESS_EQUAL:    return IR_LESS_EQUAL;
-        case TOKEN_GREATER:       return IR_GREATER_EQUAL;
+        case TOKEN_GREATER:       return IR_GREATER;
         case TOKEN_GREATER_EQUAL: return IR_GREATER_EQUAL;
         default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
