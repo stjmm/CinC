@@ -163,9 +163,11 @@ struct token lexer_next_token()
             else return make_token(TOKEN_OR);
         case '<':
             if (match('=')) return make_token(TOKEN_LESS_EQUAL);
+            else if (match('<')) return make_token(TOKEN_LESS_LESS);
             else return make_token(TOKEN_LESS);
         case '>':
             if (match('=')) return make_token(TOKEN_GREATER_EQUAL);
+            else if (match('>')) return make_token(TOKEN_GREATER_GREATER);
             else return make_token(TOKEN_GREATER);
         case ';': return make_token(TOKEN_SEMICOLON);
     }

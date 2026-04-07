@@ -6,7 +6,7 @@
 
 int main(int argc, char **argv)
 {
-    const char *program_source = "int main(void) \n{ return (3 < 2); }\n";
+    const char *program_source = "int main(void) \n{ return (4 >> 1); }\n";
 
     /* LEXER PHASE */
 

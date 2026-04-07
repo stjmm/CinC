@@ -62,6 +62,7 @@ const char *reg_name_32(enum reg r)
 {
     switch (r) {
         case REG_AX:  return "eax";
+        case REG_CX:  return "ecx";
         case REG_DX:  return "edx";
         case REG_R10: return "r10d";
         case REG_R11: return "r11d";
@@ -73,6 +74,7 @@ const char *reg_name_8(enum reg r)
 {
     switch (r) {
         case REG_AX:  return "al";
+        case REG_CX:  return "cl";
         case REG_DX:  return "dl";
         case REG_R10: return "r10b";
         case REG_R11: return "r11b";
@@ -136,6 +138,17 @@ static struct asm_instr *make_mov(struct operand src, struct operand dst)
     return instr;
 }
 
+static struct asm_instr *make_binary(enum asm_op op, struct operand src,
+                                     struct operand dst)
+{
+    struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
+    instr->type = ASM_BINARY;
+    instr->binary.op = op;
+    instr->binary.src = src;
+    instr->binary.dst = dst;
+    return instr;
+}
+
 static struct asm_instr *make_cmp(struct operand oper1, struct operand oper2)
 {
     struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
@@ -193,7 +206,6 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             struct operand src2 = convert_val(instr->binary.src2);
             struct operand dst = convert_val(instr->binary.dst);
 
-            // Special case for division and remainder
             // Converts Binary to Mov(src, AX), Cdq, Idiv(src), Mov(AX/DX, dst)
             if (instr->binary.op == IR_DIVIDE || instr->binary.op == IR_REMAINDER) {
                 struct asm_instr *mov1 = make_mov(src1, make_reg_operand(REG_AX));
@@ -229,6 +241,48 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 set_cc->set_cc.code = convert_to_cond(instr->binary.op);
                 set_cc->set_cc.oper = dst;
                 append_instr(fn, set_cc);
+                break;
+            }
+
+            // and/or/xor op1 op2 -> mov op1 eax / and op2 eax / mov eax dst
+            if (instr->binary.op == IR_AND || instr->binary.op == IR_OR ||
+                instr->binary.op == IR_XOR) {
+                struct operand reg_ax = make_reg_operand(REG_AX);
+                struct asm_instr *mov = make_mov(src1, reg_ax);
+                append_instr(fn, mov);
+    
+                enum asm_op bitwise_op;
+                if (instr->binary.op == IR_AND) bitwise_op = ASM_AND;
+                else if (instr->binary.op == IR_OR) bitwise_op = ASM_OR;
+                else bitwise_op = ASM_XOR;
+
+                struct asm_instr *bitwise = calloc(1, sizeof(struct asm_instr));
+                bitwise->type = ASM_BINARY;
+                bitwise->binary.op = bitwise_op;
+                bitwise->binary.src = src2;
+                bitwise->binary.dst = reg_ax;
+                append_instr(fn, bitwise);
+
+                struct asm_instr *mov2 = make_mov(reg_ax, dst);
+                append_instr(fn, mov2);
+                break;
+            }
+
+            if (instr->binary.op == IR_SHIFT_LEFT || instr->binary.op == IR_SHIFT_RIGHT) {
+                enum asm_op shift_op = instr->binary.op == IR_SHIFT_LEFT ? ASM_SHL : ASM_SHR;
+                struct operand ax = make_reg_operand(REG_AX);
+                append_instr(fn, make_mov(src1, ax));
+
+                struct operand count;
+                if (src2.type == OPERAND_IMM) {
+                    count = src2;
+                } else {
+                    append_instr(fn, make_mov(src2, make_reg_operand(REG_CX)));
+                    count = make_reg_operand(REG_CX);
+                }
+
+                append_instr(fn, make_binary(shift_op, count, ax));
+                append_instr(fn, make_mov(ax, dst));
                 break;
             }
 
@@ -421,6 +475,7 @@ static void asm_phase3(struct asm_program *program, int stack_offset)
                 bool src_mem = curr->binary.src.type == OPERAND_STACK;
                 bool dst_mem = curr->binary.dst.type == OPERAND_STACK;
                 bool is_mul = curr->binary.op == ASM_IMUL;
+                bool is_shift = curr->binary.op == ASM_SHL || curr->binary.op == ASM_SHR;
 
                 if (is_mul && dst_mem) {
                     // imull src, mem  ->  movl mem, %r11d / imull src, %r11d / movl %r11d, mem
@@ -443,6 +498,14 @@ static void asm_phase3(struct asm_program *program, int stack_offset)
                     op->binary.dst = curr->binary.dst;
                     chain_instr(m1, op);
                     curr = replace_instr(fn, prev, curr, m1, op);
+                } else if (is_shift && src_mem) {
+                    // shll mem, dst -> movl mem, %ecx / shll %cl, dst
+                    struct asm_instr *mov = make_mov(curr->binary.src, make_reg_operand(REG_CX));
+                    struct asm_instr *op  = make_binary(curr->binary.op,
+                                                        make_reg_operand(REG_CX),
+                                                        curr->binary.dst);
+                    chain_instr(mov, op);
+                    curr = replace_instr(fn, prev, curr, mov, op);
                 }
                 break;
             }
@@ -541,10 +604,19 @@ void emit_x86(struct ir_program *ir, FILE *file)
                     case ASM_ADD: op = "addl"; break;
                     case ASM_SUB: op = "subl"; break;
                     case ASM_IMUL: op = "imull"; break;
+                    case ASM_OR: op = "orl"; break;
+                    case ASM_AND: op = "andl"; break;
+                    case ASM_XOR: op = "xorl"; break;
+                    case ASM_SHL: op = "shll"; break;
+                    case ASM_SHR: op = "shrl"; break;
                     default: op = "???"; break;
                 }
+                bool is_shift = instr->binary.op == ASM_SHL || instr->binary.op == ASM_SHR;
                 fprintf(file, "    %s     ", op);
-                EMIT_OPERAND(file, instr->binary.src);
+                if (is_shift && instr->binary.src.type == OPERAND_REG)
+                    EMIT_OPERAND_8(file, instr->binary.src);
+                else
+                    EMIT_OPERAND(file, instr->binary.src);
                 fprintf(file, ", ");
                 EMIT_OPERAND(file, instr->binary.dst);
                 fprintf(file, "\n");

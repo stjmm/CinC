@@ -18,15 +18,19 @@ typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
 
 enum precedence {
     PREC_NONE,
-    PREC_ASSIGNMENT, // =
-    PREC_OR,         // ||
-    PREC_AND,        // &&
-    PREC_EQUALITY,   // == !=
-    PREC_COMPARISON, // < > <= >=
-    PREC_TERM,       // -+
-    PREC_FACTOR,     // */
-    PREC_UNARY,      // ++x ! -
-    PREC_POSTFIX,    // () [] x++
+    PREC_ASSIGNMENT,    // =
+    PREC_OR,            // ||
+    PREC_AND,           // &&
+    PREC_BITWISE_OR,    // |
+    PREC_BITWISE_XOR,   // ^
+    PREC_BITWISE_AND,   // &
+    PREC_EQUALITY,      // == !=
+    PREC_COMPARISON,    // < > <= >=
+    PREC_BITWISE_SHIFT, // << >>
+    PREC_TERM,          // -+
+    PREC_FACTOR,        // */%
+    PREC_UNARY,         // ++x ! -
+    PREC_POSTFIX,       // () [] x++
     PREC_PRIMARY,
 };
 
@@ -183,6 +187,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
     [TOKEN_BANG]          = {unary, NULL, PREC_NONE},
     [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
+    [TOKEN_CARET]         = {NULL, binary, PREC_BITWISE_XOR},
     [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
     [TOKEN_PLUS_PLUS]     = {NULL, NULL, PREC_UNARY},
     [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
@@ -190,12 +195,14 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
     [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},
     [TOKEN_LESS_EQUAL]    = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_LESS_LESS]     = {NULL, binary, PREC_BITWISE_SHIFT},
     [TOKEN_GREATER]       = {NULL, binary, PREC_COMPARISON},
     [TOKEN_GREATER_EQUAL] = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_GREATER_GREATER] = {NULL, binary, PREC_BITWISE_SHIFT},
     [TOKEN_AND_AND]       = {NULL, binary, PREC_AND},
     [TOKEN_OR_OR]         = {NULL, binary, PREC_OR},
-    [TOKEN_OR]            = {NULL, NULL, PREC_NONE},
-    [TOKEN_AND]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_OR]            = {NULL, binary, PREC_BITWISE_OR},
+    [TOKEN_AND]           = {NULL, binary, PREC_BITWISE_AND},
     [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},
     [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},

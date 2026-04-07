@@ -19,6 +19,7 @@
     X(TOKEN_STAR)                 \
     X(TOKEN_SLASH)                \
     X(TOKEN_TILDE)                \
+    X(TOKEN_CARET)                \
     X(TOKEN_PERCENT)              \
     X(TOKEN_EQUAL)                \
     X(TOKEN_EQUAL_EQUAL)          \
@@ -26,14 +27,16 @@
     X(TOKEN_PLUS_PLUS)            \
     X(TOKEN_BANG)                 \
     X(TOKEN_BANG_EQUAL)           \
-    X(TOKEN_AND_AND)              \
     X(TOKEN_AND)                  \
-    X(TOKEN_OR_OR)                \
+    X(TOKEN_AND_AND)              \
     X(TOKEN_OR)                   \
+    X(TOKEN_OR_OR)                \
     X(TOKEN_LESS)                 \
-    X(TOKEN_GREATER)              \
     X(TOKEN_LESS_EQUAL)           \
+    X(TOKEN_LESS_LESS)            \
+    X(TOKEN_GREATER)              \
     X(TOKEN_GREATER_EQUAL)        \
+    X(TOKEN_GREATER_GREATER)      \
     /* Literals */                \
     X(TOKEN_IDENTIFIER)           \
     X(TOKEN_NUMBER)               \

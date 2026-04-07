@@ -10,6 +10,7 @@
 // Size agnostic registers
 enum reg {
     REG_AX,
+    REG_CX,
     REG_DX,
     REG_R10,
     REG_R11,
@@ -39,11 +40,18 @@ enum cond_code {
 };
 
 enum asm_op {
+    // Unary
+    ASM_NEG,
+    ASM_NOT,
+    // Binary
     ASM_ADD,
     ASM_SUB,
     ASM_IMUL,
-    ASM_NEG,
-    ASM_NOT,
+    ASM_AND,
+    ASM_OR,
+    ASM_XOR,
+    ASM_SHL,
+    ASM_SHR,
 };
 
 enum asm_instr_type { 

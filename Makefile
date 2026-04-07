@@ -6,6 +6,7 @@ EXE=$(BUILD)/cinc
 
 SRC=$(wildcard src/*.c)
 OBJ=$(SRC:src/%.c=$(BUILD)/%.o)
+DEP=$(OBJ:.o=.d)
 
 all: debug
 
@@ -17,10 +18,12 @@ release: $(EXE)
 
 $(BUILD)/%.o: src/%.c
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 $(EXE): $(OBJ)
 	$(CC) -o $@ $^
+
+-include $(DEP)
 
 clean:
 	rm -rf $(BUILD)
