@@ -6,7 +6,7 @@
 
 int main(int argc, char **argv)
 {
-    const char *program_source = "int main(void) \n{ return (4 >> 1); }\n";
+    const char *program_source = "int main(void) \n{ return (4 << 1); }\n";
 
     /* LEXER PHASE */
 
@@ -18,7 +18,7 @@ int main(int argc, char **argv)
     ast_print(root, 0);
 
     /* IR */
-    struct ir_program *ir = tacky_build(root);
+    struct ir_program *ir = build_tacky(root);
 
     /* CODEGEN */
     FILE *file = fopen("a.s", "w");

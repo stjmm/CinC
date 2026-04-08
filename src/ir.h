@@ -98,6 +98,6 @@ struct ir_program {
     struct ir_function *function;
 };
 
-struct ir_program *tacky_build(struct ast_node *root);
+struct ir_program *build_tacky(struct ast_node *root);
 
 #endif

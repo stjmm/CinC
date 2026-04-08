@@ -214,7 +214,7 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     return fn;
 }
 
-struct ir_program *tacky_build(struct ast_node *root)
+struct ir_program *build_tacky(struct ast_node *root)
 {
     struct ir_program *program = calloc(1, sizeof(struct ir_program));
     program->function = emit_function(root->program.first);

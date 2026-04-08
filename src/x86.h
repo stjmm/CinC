@@ -77,11 +77,11 @@ struct asm_instr {
         struct { enum asm_op op; struct operand dst; } unary;
         struct { enum asm_op op; struct operand src; struct operand dst; } binary;
         struct { struct operand oper1; struct operand oper2; } cmp;
-        struct { struct operand idiv_operand; } idiv;
+        struct { struct operand oper; } idiv;
         struct { } cdq;
         struct { int identifier; } jmp;
-        struct { enum cond_code code; int identifier; } jmp_cc;
-        struct { enum cond_code code; struct operand oper; } set_cc;
+        struct { enum cond_code code; int identifier; } jmpcc;
+        struct { enum cond_code code; struct operand oper; } setcc;
         struct { int identifier; } label;
         struct { int val; } allocate_stack;
         struct { } ret;
