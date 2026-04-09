@@ -1,12 +1,42 @@
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "parser.h"
 #include "ir.h"
 #include "x86.h"
 
+static char *read_file(const char *source)
+{
+    FILE *file = fopen(source, "r");
+    if (!file) {
+        exit(1);
+    }
+    
+    fseek(file, 0, SEEK_END);
+    size_t file_size = ftell(file);
+    rewind(file);
+
+    char *buffer = malloc(file_size + 1);
+    if (!buffer) {
+        exit(1);
+    }
+
+    size_t bytes_read = fread(buffer, sizeof(char), file_size, file);
+    buffer[bytes_read] = '\0';
+    
+    fclose(file);
+    return buffer;
+}
+
+static void parse_args(int argc, char **argv)
+{
+
+}
+
 int main(int argc, char **argv)
 {
-    const char *program_source = "int main(void) \n{ return (4 << 1); }\n";
+    const char *program_source = read_file(argv[1]);
 
     /* LEXER PHASE */
 

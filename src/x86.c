@@ -203,6 +203,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_cdq());
                 append_instr(fn, make_idiv(src2));
                 append_instr(fn, make_mov(make_reg(op == IR_DIVIDE ? REG_AX : REG_DX), dst));
+                break;
             }
 
             if (op == IR_EQUAL || op == IR_NOT_EQUAL ||
@@ -318,7 +319,7 @@ static void convert_pseudo(struct operand *oper, int *map, int *offset)
 
 static int asm_phase2(struct asm_program *program)
 {
-    int pseudo_map[64] = {0};
+    int pseudo_map[128] = {0};
     int stack_offset = 0;
 
     struct asm_function *fn = program->function;
@@ -339,6 +340,12 @@ static int asm_phase2(struct asm_program *program)
             case ASM_SETCC:
                 convert_pseudo(&instr->setcc.oper, pseudo_map, &stack_offset);
                 break;
+            case ASM_IDIV:
+                convert_pseudo(&instr->idiv.oper, pseudo_map, &stack_offset);
+                break;
+            case ASM_CMP:
+                convert_pseudo(&instr->cmp.oper1, pseudo_map, &stack_offset);
+                convert_pseudo(&instr->cmp.oper2, pseudo_map, &stack_offset);
             default:
                 break;
         }
@@ -375,6 +382,7 @@ static void asm_phase3(struct asm_program *program, int stack_size)
             case ASM_MOV: {
                 bool src_mem = curr->mov.src.type == OPERAND_STACK;
                 bool dst_mem = curr->mov.dst.type == OPERAND_STACK;
+
                 if (src_mem && dst_mem) {
                     struct asm_instr *a = make_mov(curr->mov.src, r10);
                     struct asm_instr *b = make_mov(r10, curr->mov.dst);
@@ -559,7 +567,7 @@ void emit_x86(struct ir_program *ir, FILE *file)
             }
             case ASM_BINARY: {
                 bool is_shift = instr->binary.op == ASM_SHL || instr->binary.op == ASM_SHR;
-                fprintf(file, "    %s     ", asm_op_str(instr->unary.op));
+                fprintf(file, "    %s     ", asm_op_str(instr->binary.op));
                 emit_operand(file, instr->binary.src, is_shift && instr->binary.src.type == OPERAND_REG);
                 fprintf(file, ", ");
                 emit_operand(file, instr->binary.dst, false);
@@ -594,7 +602,7 @@ void emit_x86(struct ir_program *ir, FILE *file)
             }
             case ASM_JMPCC: {
                 char l[10];
-                sprintf(l, ".L%d", instr->jmp.identifier);
+                sprintf(l, ".L%d", instr->jmpcc.identifier);
                 fprintf(file, "    j%s    %s\n", cond_suffix(instr->jmpcc.code), l);
                 break;
             }

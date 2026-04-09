@@ -28,5 +28,8 @@ $(EXE): $(OBJ)
 clean:
 	rm -rf $(BUILD)
 
+test: $(EXE)
+	@bash tests/test_runner.sh
+
 run: all
 	@$(EXE)
