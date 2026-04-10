@@ -31,7 +31,10 @@ static char *read_file(const char *source)
 
 static void parse_args(int argc, char **argv)
 {
-
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s program.c\n", argv[0]);
+        exit(1);
+    }
 }
 
 int main(int argc, char **argv)

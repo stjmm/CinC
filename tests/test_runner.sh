@@ -49,7 +49,7 @@ run_test() {
 
         err=$(gcc "$tmp/a.s" -o "$tmp/out" 2>&1)
         if [ $? -ne 0 ]; then
-            echo -e "${RED}FAIL{$ENDCOLOR}: $base (gcc couldn't assemble output)"
+            echo -e "${RED}FAIL${ENDCOLOR}: $base (gcc couldn't assemble output)"
             echo "      $err"
             ((FAIL++))
             rm -rf "$tmp"; return
@@ -63,7 +63,7 @@ run_test() {
             echo -e "${GREEN}PASS${ENDCOLOR}: $base (exited $got)"
             ((PASS++))
         else
-            echo -e "${RED}FAIL{$ENDCOLOR}: $base (expected exit $tag, got $got)"
+            echo -e "${RED}FAIL${ENDCOLOR}: $base (expected exit $tag, got $got)"
             ((FAIL++))
         fi
 
