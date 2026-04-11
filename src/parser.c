@@ -121,7 +121,7 @@ static void consume(enum token_type type, const char *message)
         return;
     }
 
-    error(&parser_state.current, message);
+    error(&parser_state.previous, message);
 }
 
 static bool match(enum token_type type)
@@ -248,13 +248,13 @@ static struct ast_node *parse_statement(void)
     if (match(TOKEN_RETURN)) {
         struct token return_tok = parser_state.previous;
         struct ast_node *expr = NULL;
-        if (!match(TOKEN_SEMICOLON)) {
+
+        if (!match(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
             expr = parse_expression(PREC_ASSIGNMENT);
             if (!expr) return NULL;
-
-            consume(TOKEN_SEMICOLON, "Expected ';' after return value");
         }
 
+        consume(TOKEN_SEMICOLON, "Expected ';' after return value");
         return AST_NEW(AST_RETURN, return_tok, .return_stmt.expr = expr);
     }
 
@@ -268,7 +268,7 @@ static struct ast_node *parse_block(void)
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         struct ast_node *stmt = parse_statement();
-        if (!stmt) {
+        if (!stmt || parser_state.panic_mode) {
             synchronize_statement();
             continue;
         }
@@ -278,7 +278,10 @@ static struct ast_node *parse_block(void)
         tail = stmt;
     }
 
-    consume(TOKEN_RIGHT_BRACE, "Expected '}' after body");
+    if (!parser_state.had_error)
+        consume(TOKEN_RIGHT_BRACE, "Expected '}' after body");
+    else 
+        match(TOKEN_RIGHT_BRACE);
     return block;
 }
 
