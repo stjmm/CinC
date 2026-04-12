@@ -11,10 +11,18 @@ static void print_expr(struct ast_node *node)
             printf("%ld", node->constant.value);
             break;
         case AST_IDENTIFIER:
+            printf("%.*s", (int)node->token.length, node->token.start);
             break;
         case AST_UNARY:
             printf("(%.*s ", (int)node->token.length, node->token.start);
             print_expr(node->unary.expr);
+            printf(")");
+            break;
+        case AST_ASSIGNMENT:
+            printf("(%.*s ", (int)node->token.length, node->token.start);
+            print_expr(node->assignment.lvalue);
+            printf(" ");
+            print_expr(node->assignment.rvalue);
             printf(")");
             break;
         case AST_BINARY:
@@ -43,9 +51,12 @@ void ast_print(struct ast_node *node, int depth)
         case AST_IDENTIFIER:
             INDENT(); printf("(ident %.*s)\n", (int)node->token.length, node->token.start);
             break;
+        case AST_NULL_STMT:
+            INDENT(); printf("(null_stmt)\n");
+            break;
         case AST_EXPR_STMT:
             INDENT(); printf("(expr_stmt ");
-            ast_print(node->expr_stmt.expr, depth + 1);
+            print_expr(node->expr_stmt.expr);
             printf(")\n");
             break;
         case AST_RETURN:
@@ -65,6 +76,21 @@ void ast_print(struct ast_node *node, int depth)
             print_expr(node->binary.right);
             printf(")\n");
             break;
+        case AST_ASSIGNMENT:
+            INDENT(); printf("(= ");
+            print_expr(node->assignment.lvalue);
+            printf(" ");
+            print_expr(node->assignment.rvalue);
+            printf(")\n");
+            break;
+        case AST_DECLARATION:
+            INDENT(); printf("(decl %.*s", (int)node->token.length, node->token.start);
+            if (node->declaration.init) {
+                printf(" = ");
+                print_expr(node->declaration.init);
+            }
+            printf(")\n");
+            break;
         case AST_BLOCK:
             INDENT(); printf("(block\n");
             for (struct ast_node *n = node->block.first; n; n = n->next)
@@ -73,7 +99,7 @@ void ast_print(struct ast_node *node, int depth)
             break;
         case AST_FUNCTION:
             INDENT(); printf("(fn %.*s -> %.*s\n",
-                (int)node->function.name.length, node->function.name.start,
+                (int)node->token.length, node->token.start,
                 (int)node->function.return_type.length, node->function.return_type.start);
             ast_print(node->function.body, depth + 1);
             INDENT(); printf(")\n");

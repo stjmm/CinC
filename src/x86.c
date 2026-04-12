@@ -146,8 +146,10 @@ static struct operand convert_val(struct ir_val v)
 
 static void append_instr(struct asm_function *fn, struct asm_instr *instr)
 {
-    if (!fn->last) fn->first = instr;
-    else fn->last->next = instr;
+    if (!fn->last)
+        fn->first = instr;
+    else
+        fn->last->next = instr;
     fn->last = instr;
 }
 
@@ -157,10 +159,13 @@ static struct asm_instr *replace_instr(struct asm_function *fn,
 {
     last_new->next = curr->next;
 
-    if (prev) prev->next = first_new;
-    else fn->first = first_new;
+    if (prev)
+        prev->next = first_new;
+    else
+        fn->first = first_new;
 
-    if (fn->last == curr) fn->last = last_new;
+    if (fn->last == curr)
+        fn->last = last_new;
 
     free(curr);
     return last_new;
@@ -204,27 +209,21 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_idiv(src2));
                 append_instr(fn, make_mov(make_reg(op == IR_DIVIDE ? REG_AX : REG_DX), dst));
                 break;
-            }
-
-            if (op == IR_EQUAL || op == IR_NOT_EQUAL ||
+            } else if (op == IR_EQUAL || op == IR_NOT_EQUAL ||
                 op == IR_LESS || op == IR_LESS_EQUAL ||
                 op == IR_GREATER || op == IR_GREATER_EQUAL) {
                 append_instr(fn, make_cmp(src2, src1));
                 append_instr(fn, make_mov(make_imm(0), dst));
                 append_instr(fn, make_setcc(convert_to_cond(op), dst));
                 break;
-            }
-
-            if (op == IR_AND || op == IR_OR || op == IR_XOR) {
+            } else if (op == IR_AND || op == IR_OR || op == IR_XOR) {
                 struct operand ax = make_reg(REG_AX);
 
                 append_instr(fn, make_mov(src1, ax));
                 append_instr(fn, make_binary(convert_binop(op), src2, ax));
                 append_instr(fn, make_mov(ax, dst));
                 break;
-            }
-
-            if (instr->binary.op == IR_SHIFT_LEFT || instr->binary.op == IR_SHIFT_RIGHT) {
+            } else if (instr->binary.op == IR_SHIFT_LEFT || instr->binary.op == IR_SHIFT_RIGHT) {
                 struct operand ax = make_reg(REG_AX);
                 struct operand count;
 

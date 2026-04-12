@@ -42,6 +42,7 @@
     X(TOKEN_NUMBER)               \
     /* Keywords */                \
     X(TOKEN_INT)                  \
+    X(TOKEN_VOID)                 \
     X(TOKEN_RETURN)               \
     /* Misc */                    \
     X(TOKEN_ERROR)                \

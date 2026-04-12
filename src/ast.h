@@ -15,11 +15,14 @@
     X(AST_IDENTIFIER)   \
     X(AST_UNARY)        \
     X(AST_BINARY)       \
+    X(AST_ASSIGNMENT)   \
     /* Statements */    \
     X(AST_EXPR_STMT)    \
+    X(AST_NULL_STMT)    \
     X(AST_RETURN)       \
     X(AST_BLOCK)        \
     /* Declarations */  \
+    X(AST_DECLARATION)  \
     X(AST_FUNCTION)     \
     /* Top level */     \
     X(AST_PROGRAM)      
@@ -36,20 +39,30 @@ struct ast_node {
     struct ast_node *next;   // Linked-list for block or program (default NULL)
     union {
         struct { long value; } constant;
-        struct {} identifier;
         struct { struct ast_node *expr; } unary;
         struct {
             struct ast_node *left;
             struct ast_node *right;
         } binary;
+        struct {
+            struct ast_node *lvalue;
+            struct ast_node *rvalue;
+        } assignment;
+
         struct { struct ast_node *expr; } expr_stmt;
         struct { struct ast_node *expr; } return_stmt;
         struct { struct ast_node *first; } block;
+
         struct {
-            struct token name;
-            struct token return_type;
+            struct ast_node *name;
+            struct ast_node *init;
+        } declaration;
+        struct {
+            struct ast_node *name;
             struct ast_node *body;
+            struct token return_type;
         } function;
+
         struct { struct ast_node *first; } program;
     };
 };

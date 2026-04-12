@@ -69,18 +69,21 @@ static void advance(void)
     parser_state.previous = parser_state.current;
     for (;;) {
         parser_state.current = lexer_next_token();
-        if (parser_state.current.type != TOKEN_ERROR) break;
+        if (parser_state.current.type != TOKEN_ERROR)
+            break;
 
         error(&parser_state.current, "Unexpected character");
     }
 }
 
-static void synchronize_statement(void)
+static void synchronize_block_item(void)
 {
     parser_state.panic_mode = false;
 
     while (parser_state.current.type != TOKEN_EOF) {
-        if (parser_state.previous.type == TOKEN_SEMICOLON) return;
+        if (parser_state.previous.type == TOKEN_SEMICOLON)
+            return;
+
         switch (parser_state.current.type) {
             case TOKEN_INT:
             case TOKEN_RETURN:
@@ -93,7 +96,7 @@ static void synchronize_statement(void)
     }
 }
 
-static void synchronize_declaration(void)
+static void synchronize_translation_unit(void)
 {
     parser_state.panic_mode = false;
 
@@ -148,11 +151,21 @@ static struct ast_node *number(void)
     );
 }
 
+static struct ast_node *identifier(void)
+{
+    return AST_NEW(
+        AST_IDENTIFIER,
+        parser_state.previous
+    );
+}
+
 static struct ast_node *unary(void)
 {
     struct token op = parser_state.previous;
     struct ast_node *expr = parse_expression(PREC_UNARY);
-    if (!expr) return NULL;
+
+    if (!expr)
+        return NULL;
     return AST_NEW(AST_UNARY, op, .unary.expr = expr);
 }
 
@@ -168,8 +181,24 @@ static struct ast_node *binary(struct ast_node *left)
     struct token op = parser_state.previous;
     struct parse_rule *rule = get_rule(op.type);
     struct ast_node *right = parse_expression(rule->prec + 1);
-    if (!right) return NULL;
+
+    if (!right)
+        return NULL;
     return AST_NEW(AST_BINARY, op, .binary.left = left, .binary.right = right);
+}
+
+static struct ast_node *assignment(struct ast_node *left)
+{
+    struct token op = parser_state.previous;
+
+    struct ast_node *right = parse_expression(PREC_ASSIGNMENT);
+    if (!right)
+        return NULL;
+
+    return AST_NEW(AST_ASSIGNMENT, op,
+            .assignment.lvalue = left,
+            .assignment.rvalue = right
+    );
 }
 
 static struct parse_rule parse_rules[] = {
@@ -190,7 +219,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_CARET]         = {NULL, binary, PREC_BITWISE_XOR},
     [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
     [TOKEN_PLUS_PLUS]     = {NULL, NULL, PREC_UNARY},
-    [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_EQUAL]         = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_EQUAL_EQUAL]   = {NULL, binary, PREC_EQUALITY},
     [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
     [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},
@@ -203,7 +232,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_OR_OR]         = {NULL, binary, PREC_OR},
     [TOKEN_OR]            = {NULL, binary, PREC_BITWISE_OR},
     [TOKEN_AND]           = {NULL, binary, PREC_BITWISE_AND},
-    [TOKEN_IDENTIFIER]    = {NULL, NULL, PREC_NONE},
+    [TOKEN_IDENTIFIER]    = {identifier, NULL, PREC_NONE},
     [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
     [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
@@ -237,9 +266,15 @@ static struct ast_node *parse_expression(enum precedence prec)
 
 static struct ast_node *parse_expr_stmt(void)
 {
+    if (match(TOKEN_SEMICOLON))
+        return AST_NEW(AST_NULL_STMT, parser_state.previous);
+
     struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
-    if (!expr) return NULL;
+    if (!expr)
+        return NULL;
+
     consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
+
     return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
 }
 
@@ -251,7 +286,8 @@ static struct ast_node *parse_statement(void)
 
         if (!match(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
             expr = parse_expression(PREC_ASSIGNMENT);
-            if (!expr) return NULL;
+            if (!expr)
+                return NULL;
         }
 
         consume(TOKEN_SEMICOLON, "Expected ';' after return value");
@@ -261,60 +297,88 @@ static struct ast_node *parse_statement(void)
     return parse_expr_stmt();
 }
 
+static struct ast_node *parse_declaration(void)
+{
+    struct token return_type = parser_state.previous;
+
+    consume(TOKEN_IDENTIFIER, "Expected variable name");
+    struct ast_node *name = AST_NEW(AST_IDENTIFIER, parser_state.previous);
+
+    struct ast_node *init = NULL;
+    if (match(TOKEN_EQUAL))
+        init = parse_expression(PREC_ASSIGNMENT);
+
+    consume(TOKEN_SEMICOLON, "Expected ';' after variable");
+    
+    return AST_NEW(AST_DECLARATION, name->token, 
+            .declaration.name = name,
+            .declaration.init = init
+    );
+}
+
 static struct ast_node *parse_block(void)
 {
     struct ast_node *block = AST_NEW(AST_BLOCK, parser_state.previous);
     struct ast_node *tail = NULL;
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-        struct ast_node *stmt = parse_statement();
-        if (!stmt || parser_state.panic_mode) {
-            synchronize_statement();
+        struct ast_node *item = NULL;
+        if (match(TOKEN_INT))
+            item = parse_declaration();
+        else
+            item = parse_statement();
+
+        if (!item || parser_state.panic_mode) {
+            synchronize_block_item();
             continue;
         }
         
-        if (!tail) block->block.first = stmt;
-        else tail->next = stmt;
-        tail = stmt;
+        if (!tail)
+            block->block.first = item;
+        else
+            tail->next = item;
+        tail = item;
     }
 
     if (!parser_state.had_error)
         consume(TOKEN_RIGHT_BRACE, "Expected '}' after body");
     else 
         match(TOKEN_RIGHT_BRACE);
+
     return block;
 }
 
 static struct ast_node *parse_function(void)
 {
     struct token return_type = parser_state.previous;
-    consume(TOKEN_IDENTIFIER, "Expected function name.");
-    struct token name = parser_state.previous;
 
-    consume(TOKEN_LEFT_PAREN, "Expected '(' after function name.");
-    if (match(TOKEN_IDENTIFIER)) {}
-    consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name.");
+    consume(TOKEN_IDENTIFIER, "Expected function name");
+    struct token name_tok = parser_state.previous;
+    struct ast_node *name = AST_NEW(AST_IDENTIFIER, parser_state.previous);
 
-    consume(TOKEN_LEFT_BRACE, "Expected '{' before function body.");
+    consume(TOKEN_LEFT_PAREN, "Expected '(' after function name");
+    consume(TOKEN_VOID, "Expected 'void' int parameters list");
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name");
+
+    consume(TOKEN_LEFT_BRACE, "Expected '{' before function body");
     struct ast_node *body = parse_block();
 
-    return AST_NEW(AST_FUNCTION, name,
+    return AST_NEW(AST_FUNCTION, name_tok,
         .function.name = name,
         .function.return_type = return_type,
         .function.body = body);
 }
 
-static struct ast_node *parse_declaration(void)
+static struct ast_node *parse_external_declaration(void)
 {
-    if (match(TOKEN_INT)) {
+    if (match(TOKEN_INT))
         return parse_function();
-    }
 
     error(&parser_state.current, "Expected declaration");
     return NULL;
 }
 
-struct ast_node *parse_program(const char *source)
+struct ast_node *parse_translation_unit(const char *source)
 {
     lexer_init(source);
     advance();
@@ -323,14 +387,16 @@ struct ast_node *parse_program(const char *source)
     struct ast_node *tail = NULL;
 
     while (!check(TOKEN_EOF)) {
-        struct ast_node *decl = parse_declaration();
+        struct ast_node *decl = parse_external_declaration();
         if (!decl) {
-            synchronize_declaration();
+            synchronize_translation_unit();
             continue;
         }
 
-        if (!tail) program->program.first = decl;
-        else tail->next = decl;
+        if (!tail) 
+            program->program.first = decl;
+        else 
+            tail->next = decl;
         tail = decl;
     }
 

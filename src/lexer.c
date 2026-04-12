@@ -49,6 +49,7 @@ static bool is_alpha(char c)
     if ((c >= 'a' && c <= 'z') ||
         (c >= 'A' && c <= 'Z') ||
          c == '_') return true;
+
     return false;
 }
 
@@ -113,6 +114,7 @@ static enum token_type identifier_type(void)
     switch (lexer_state.start[0]) {
         case 'i': return check_keyword(1, 2, "nt", TOKEN_INT);
         case 'r': return check_keyword(1, 5, "eturn", TOKEN_RETURN);
+        case 'v': return check_keyword(1, 3, "oid", TOKEN_VOID);
     }
     return TOKEN_IDENTIFIER;
 }

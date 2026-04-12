@@ -3,6 +3,6 @@
 
 #include "ast.h"
 
-struct ast_node *parse_program(const char *source);
+struct ast_node *parse_translation_unit(const char *source);
 
 #endif

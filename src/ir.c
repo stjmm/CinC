@@ -56,8 +56,10 @@ static enum ir_binary_op convert_binop(struct token tok)
 
 static void append_instr(struct ir_function *fn, struct ir_instr *instr)
 {
-    if (!fn->first) fn->first = instr;
-    else fn->last->next = instr;
+    if (!fn->first)
+        fn->first = instr;
+    else
+        fn->last->next = instr;
     fn->last = instr;
 }
 
@@ -79,11 +81,10 @@ static void emit_jump_cond(struct ir_function *fn, struct ir_val cond,
         int label_id, enum ir_instr_type type)
 {
     struct ir_instr *i = calloc(1, sizeof(struct ir_instr));
-    if (type == IR_JUMP_IF_ZERO) {
+    if (type == IR_JUMP_IF_ZERO)
         *i = (struct ir_instr){ .type = type, .jump_if_zero.cond = cond, .jump_if_zero.label_id = label_id};
-    } else {
+    else
         *i = (struct ir_instr){ .type = type, .jump_if_not_zero.cond = cond, .jump_if_not_zero.label_id = label_id};
-    }
     append_instr(fn, i);
 }
 
