@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "parser.h"
+#include "sema.h""
 #include "ir.h"
 #include "x86.h"
 
@@ -43,6 +44,10 @@ int main(int argc, char **argv)
 
     /* PARSER/AST PHASE */
     struct ast_node *root = parse_translation_unit(program_source);
+    if (!root)
+        exit(1);
+
+    root = sema_analysis(root);
     if (!root)
         exit(1);
 

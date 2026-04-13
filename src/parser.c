@@ -357,7 +357,7 @@ static struct ast_node *parse_function(void)
     struct ast_node *name = AST_NEW(AST_IDENTIFIER, parser_state.previous);
 
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name");
-    consume(TOKEN_VOID, "Expected 'void' int parameters list");
+    consume(TOKEN_VOID, "Expected 'void' in parameters list");
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name");
 
     consume(TOKEN_LEFT_BRACE, "Expected '{' before function body");
