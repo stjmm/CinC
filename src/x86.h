@@ -23,8 +23,11 @@ struct operand {
     union {
         int imm;
         enum reg reg;
-        int pseudo;     // Refers to temporary variables produced in TACKY
         int stack;      // Location on the stack (eg. -4(%rbp))
+        struct {
+            const char *name;
+            int length;
+        } pseudo;     // Refers to temporary variables produced in TACKY
     };
 };
 

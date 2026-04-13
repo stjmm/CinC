@@ -52,15 +52,15 @@ int main(int argc, char **argv)
         exit(1);
 
     ast_print(root, 0);
-    //
-    // /* IR */
-    // struct ir_program *ir = build_tacky(root);
-    //
-    // /* CODEGEN */
-    // FILE *file = fopen("a.s", "w");
-    // emit_x86(ir, file);
-    //
-    // fclose(file);
+
+    /* IR */
+    struct ir_program *ir = build_tacky(root);
+
+    /* CODEGEN */
+    FILE *file = fopen("a.s", "w");
+    emit_x86(ir, file);
+
+    fclose(file);
 
     return 0;
 }

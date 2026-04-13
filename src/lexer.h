@@ -58,8 +58,11 @@ struct token {
     enum token_type type;
     const char *start;     
     size_t length;
+
     int line;
-    const char *line_start; 
+    const char *line_start; // Line start for current token 
+    const char *resolved; // For error reporting in sema
+    size_t resolved_length;
 };
 
 void lexer_init(const char *source);

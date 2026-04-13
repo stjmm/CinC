@@ -1,7 +1,9 @@
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "ir.h"
+#include "ast.h"
 #include "lexer.h"
 
 static struct ir_val make_constant(long c) 
@@ -12,7 +14,17 @@ static struct ir_val make_constant(long c)
 static struct ir_val make_temp(void)
 {
     static int id = 0;
-    return (struct ir_val){ .type = IR_VAL_VAR, .var_id = id++ };
+    int n = snprintf(NULL, 0, "tmp.%d", id);
+    char *buf = malloc(n + 1);
+    snprintf(buf, n + 1, "tmp.%d", id++);
+    return (struct ir_val){ .type = IR_VAL_VAR, .var.name = buf, .var.length = n };
+}
+
+static struct ir_val make_var(struct token *tok)
+{
+    const char *name = tok->resolved ? tok->resolved : tok->start;
+    int length = tok->resolved ? strlen(tok->resolved) : tok->length;
+    return (struct ir_val){ .type = IR_VAL_VAR, .var.name = name, .var.length = length };
 }
 
 static int make_label(void)
@@ -99,6 +111,8 @@ static void emit_label(struct ir_function *fn, int label_id)
 static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
 {
     switch (expr->type) {
+        case AST_IDENTIFIER:
+            return make_var(&expr->token);
         case AST_CONSTANT:
             return make_constant(expr->constant.value);
         case AST_UNARY: {
@@ -160,7 +174,7 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
                 return dst;
             }
 
-            // Standard case for binar operations
+            // Standard case for binary operations
             struct ir_val v1 = emit_expr(expr->binary.left, fn);
             struct ir_val v2 = emit_expr(expr->binary.right, fn);
             struct ir_val dst = make_temp();
@@ -176,17 +190,23 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
             append_instr(fn, instr);
             return dst;
         }
+        case AST_ASSIGNMENT: {
+            struct ir_val lvalue = make_var(&expr->assignment.lvalue->token);
+            struct ir_val rvalue = emit_expr(expr->assignment.rvalue, fn);
+            emit_copy(fn, rvalue, lvalue);
+            return lvalue;
+        }
         default:
             fprintf(stderr, "tacky_emit: unhandled expr kind\n");
             exit(1);
     }
 }
 
-static void emit_stmt(struct ast_node *stmt, struct ir_function *fn)
+static void emit_block_item(struct ast_node *node, struct ir_function *fn)
 {
-    switch (stmt->type) {
+    switch (node->type) {
         case AST_RETURN: {
-            struct ir_val src = emit_expr(stmt->return_stmt.expr, fn);
+            struct ir_val src = emit_expr(node->return_stmt.expr, fn);
             struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
             *instr = (struct ir_instr){
                 .type = IR_RETURN,
@@ -195,6 +215,19 @@ static void emit_stmt(struct ast_node *stmt, struct ir_function *fn)
             append_instr(fn, instr);
             break;
         }
+        case AST_DECLARATION: {
+            if (node->declaration.init) {
+                struct ir_val lvalue = make_var(&node->declaration.name->token);
+                struct ir_val rvalue = emit_expr(node->declaration.init, fn);
+                emit_copy(fn, rvalue, lvalue);
+            }
+            break;
+        }
+        case AST_EXPR_STMT:
+            emit_expr(node->expr_stmt.expr, fn);
+            break;
+        case AST_NULL_STMT:
+            break;
         default:
             fprintf(stderr, "unhandled stmt kind\n");
             exit(1);
@@ -207,11 +240,9 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     fn->name = fn_node->token.start;
     fn->name_length = fn_node->token.length;
 
-    struct ast_node *stmt = fn_node->function.body->block.first;
-    while (stmt) {
-        emit_stmt(stmt, fn);
-        stmt = stmt->next;
-    }
+    for (struct ast_node *item = fn_node->function.body->block.first; item != NULL; item = item->next)
+        emit_block_item(item, fn);
+
     return fn;
 }
 

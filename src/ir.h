@@ -16,7 +16,10 @@ struct ir_val {
     enum ir_val_type type;
     union {
         long constant;
-        int var_id;
+        struct {
+            const char *name;
+            int length;
+        } var;
     };
 };
 

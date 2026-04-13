@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <stdarg.h>
 
 #include "x86.h"
@@ -140,7 +141,11 @@ static struct operand convert_val(struct ir_val v)
     if (v.type == IR_VAL_CONSTANT) {
         return make_imm(v.constant);
     } else {
-        return (struct operand){ .type = OPERAND_PSEUDO, .pseudo = v.var_id };
+        return (struct operand){
+            .type = OPERAND_PSEUDO,
+            .pseudo.name = v.var.name,
+            .pseudo.length = v.var.length
+        };
     }
 }
 
@@ -300,59 +305,79 @@ static struct asm_program *asm_phase1(struct ir_program *ir)
 
 /* Phase 2: Replace pseduo operands with stack slots */
 
-static void convert_pseudo(struct operand *oper, int *map, int *offset)
+struct pseudo_entry {
+    const char *name;
+    int length;
+    int stack_offset;
+};
+
+struct pseudo_map {
+    struct pseudo_entry entries[128];
+    int count;
+    int current_offset;
+};
+
+static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name, int length)
+{
+    for (int i = 0; i < pm->count; i++) {
+        struct pseudo_entry *e = &pm->entries[i];
+        if (e->length == length && memcmp(e->name, name, length) == 0)
+            return e->stack_offset;
+    }
+
+    pm->current_offset -= 4;
+    pm->entries[pm->count++] = (struct pseudo_entry){
+        .name         = name,
+        .length       = length,
+        .stack_offset = pm->current_offset,
+    };
+    return pm->current_offset;
+}
+
+static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
 {
     if (oper->type != OPERAND_PSEUDO)
         return;
-    
-    int id = oper->pseudo;
 
-    if (map[id] == 0) {
-        *offset += 4;
-        map[id] = -*offset;
-    }
-
-    oper->type = OPERAND_STACK;
-    oper->stack = map[id];
+    int offset = pseudo_map_get_or_insert(pm, oper->pseudo.name, oper->pseudo.length);
+    oper->type  = OPERAND_STACK;
+    oper->stack = offset;
 }
 
 static int asm_phase2(struct asm_program *program)
 {
-    int pseudo_map[128] = {0};
-    int stack_offset = 0;
+    struct pseudo_map pm = {0};
 
     struct asm_function *fn = program->function;
-    struct asm_instr *instr = fn->first;
-    while(instr) {
+    for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {
         switch (instr->type) {
             case ASM_MOV:
-                convert_pseudo(&instr->mov.src, pseudo_map, &stack_offset);
-                convert_pseudo(&instr->mov.dst, pseudo_map, &stack_offset);
+                replace_pseudo(&instr->mov.src, &pm);
+                replace_pseudo(&instr->mov.dst, &pm);
                 break;
             case ASM_UNARY:
-                convert_pseudo(&instr->unary.dst, pseudo_map, &stack_offset);
+                replace_pseudo(&instr->unary.dst, &pm);
                 break;
             case ASM_BINARY:
-                convert_pseudo(&instr->binary.src, pseudo_map, &stack_offset);
-                convert_pseudo(&instr->binary.dst, pseudo_map, &stack_offset);
+                replace_pseudo(&instr->binary.src, &pm);
+                replace_pseudo(&instr->binary.dst, &pm);
                 break;
             case ASM_SETCC:
-                convert_pseudo(&instr->setcc.oper, pseudo_map, &stack_offset);
+                replace_pseudo(&instr->setcc.oper, &pm);
                 break;
             case ASM_IDIV:
-                convert_pseudo(&instr->idiv.oper, pseudo_map, &stack_offset);
+                replace_pseudo(&instr->idiv.oper, &pm);
                 break;
             case ASM_CMP:
-                convert_pseudo(&instr->cmp.oper1, pseudo_map, &stack_offset);
-                convert_pseudo(&instr->cmp.oper2, pseudo_map, &stack_offset);
+                replace_pseudo(&instr->cmp.oper1, &pm);
+                replace_pseudo(&instr->cmp.oper2, &pm);
+                break;
             default:
                 break;
         }
-
-        instr = instr->next;
     }
 
-    return stack_offset;
+    return -pm.current_offset;  // return total bytes needed for stack frame
 }
 
 
@@ -620,6 +645,8 @@ void emit_x86(struct ir_program *ir, FILE *file)
         }
         instr = instr->next;
     }
+
+    // Additional return if not in code
     
     fprintf(file, "\n    .section .note.GNU-stack,\"\",@progbits\n");
 }

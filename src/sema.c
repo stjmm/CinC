@@ -76,8 +76,7 @@ static char *make_unique(const char *name, int length)
 {
     int n = snprintf(NULL, 0, "%.*s.%d", length, name, unique_counter);
     char *buf = malloc(n + 1);
-    snprintf(buf, n + 1, "%.*s.%d", length, name, unique_counter);
-    unique_counter++;
+    snprintf(buf, n + 1, "%.*s.%d", length, name, unique_counter++);
 
     return buf;
 }
@@ -89,7 +88,7 @@ static void error(struct token *tok, const char *message)
     fprintf(stderr, "(Sema) Error at line %d, col %d: %s", tok->line, col, message);
 
     const char *line_end = tok->line_start;
-    while (*line_end != '\0' && *line_end == '\n')
+    while (*line_end != '\0' && *line_end != '\n')
         line_end++;
     fprintf(stderr, "  %.*s\n", (int)(line_end - tok->line_start), tok->line_start);
 
@@ -116,8 +115,8 @@ static struct ast_node *resolve_expr(struct ast_node *expr, struct scope *s)
                 return NULL;
             }
 
-            expr->token.start = sym->unique_name;
-            expr->token.length = strlen(sym->unique_name);
+            expr->token.resolved = sym->unique_name;
+            expr->token.resolved_length = strlen(sym->unique_name);
 
             return expr;
         }
@@ -160,8 +159,8 @@ static struct ast_node *resolve_declaration(struct ast_node *decl, struct scope 
     if (decl->declaration.init)
         decl->declaration.init = resolve_expr(decl->declaration.init, s);
 
-    tok->start = unique;
-    tok->length = strlen(unique);
+    tok->resolved = unique;
+    tok->resolved_length = strlen(unique);
 
     return decl;
 }
