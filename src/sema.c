@@ -128,8 +128,18 @@ static struct ast_node *resolve_expr(struct ast_node *expr, struct scope *s)
 
             expr->assignment.lvalue = resolve_expr(expr->assignment.lvalue, s);
             expr->assignment.rvalue = resolve_expr(expr->assignment.rvalue, s);
-
             return expr;
+        }
+        case AST_PRE:
+        case AST_POST: {
+            if (expr->unary.expr->type != AST_IDENTIFIER) {
+                error(&expr->unary.expr->token, "Operand of '++'/'--' must be an lvalue");
+                return NULL;
+            }
+
+            expr->unary.expr = resolve_expr(expr->unary.expr, s);
+            return expr;
+
         }
         case AST_CONSTANT:
             return expr;

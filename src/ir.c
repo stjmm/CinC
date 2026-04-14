@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "ir.h"
 #include "ast.h"
@@ -62,6 +63,18 @@ static enum ir_binary_op convert_binop(struct token tok)
         case TOKEN_GREATER:         return IR_GREATER;
         case TOKEN_GREATER_EQUAL:   return IR_GREATER_EQUAL;
         case TOKEN_GREATER_GREATER: return IR_SHIFT_RIGHT;
+
+        // Compound assignments
+        case TOKEN_PLUS_EQUAL:     return IR_ADD;
+        case TOKEN_MINUS_EQUAL:    return IR_SUBTRACT;
+        case TOKEN_STAR_EQUAL:     return IR_MULTIPLY;
+        case TOKEN_SLASH_EQUAL:    return IR_DIVIDE;
+        case TOKEN_PERCENT_EQUAL:  return IR_REMAINDER;
+        case TOKEN_CARET_EQUAL:    return IR_XOR;
+        case TOKEN_OR_EQUAL:       return IR_OR;
+        case TOKEN_AND_EQUAL:      return IR_AND;
+        case TOKEN_LESS_LESS_EQUAL:return IR_SHIFT_LEFT;
+        case TOKEN_GREATER_GREATER_EQUAL:return IR_SHIFT_RIGHT;
         default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
 }
@@ -201,7 +214,6 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
             // Otherwise compound assignment
             struct ir_val lvalue = make_var(&expr->assignment.lvalue->token);
             struct ir_val rvalue = emit_expr(expr->assignment.rvalue, fn);
-            struct ir_val dst = make_temp();
 
             struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
             *instr = (struct ir_instr){
@@ -209,11 +221,34 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
                 .binary.op = convert_binop(expr->token),
                 .binary.src1 = lvalue,
                 .binary.src2 = rvalue,
-                .binary.dst = dst,
+                .binary.dst = lvalue,
             };
             append_instr(fn, instr);
-            emit_copy(fn, dst, lvalue);
-            return dst;
+            return lvalue;
+        }
+        case AST_POST:
+        case AST_PRE: {
+            bool is_incr = expr->token.type == TOKEN_PLUS_PLUS;
+
+            struct ir_val lvalue = make_var(&expr->unary.expr->token);
+
+            // Save old for pre decr/incr
+            struct ir_val old_lval;
+            if (expr->type == AST_POST) {
+                old_lval = make_temp();
+                emit_copy(fn, lvalue, old_lval);
+            }
+
+            struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+            *instr = (struct ir_instr){
+                .type = IR_BINARY,
+                .binary.op = is_incr ? IR_ADD : IR_SUBTRACT,
+                .binary.src1 = lvalue,
+                .binary.src2 = make_constant(1),
+                .binary.dst = lvalue
+            };
+            append_instr(fn, instr);
+            return expr->type == AST_PRE ? lvalue : old_lval;
         }
         default:
             fprintf(stderr, "tacky_emit: unhandled expr kind\n");

@@ -170,6 +170,14 @@ static struct ast_node *unary(void)
     return AST_NEW(AST_UNARY, op, .unary.expr = expr);
 }
 
+static struct ast_node *pre(void)
+{
+    struct token op = parser_state.previous;
+    struct ast_node *expr = parse_expression(PREC_UNARY);
+    if (!expr) return NULL;
+    return AST_NEW(AST_PRE, op, .unary.expr = expr);
+}
+
 static struct ast_node *grouping(void)
 {
     struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
@@ -202,6 +210,12 @@ static struct ast_node *assignment(struct ast_node *left)
     );
 }
 
+static struct ast_node *post(struct ast_node *left)
+{
+    struct token op = parser_state.previous;
+    return AST_NEW(AST_POST, op, .unary.expr = left);
+}
+
 static struct parse_rule parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
@@ -218,8 +232,8 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_BANG]          = {unary, NULL, PREC_NONE},
     [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
     [TOKEN_CARET]         = {NULL, binary, PREC_BITWISE_XOR},
-    [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
-    [TOKEN_PLUS_PLUS]     = {NULL, NULL, PREC_UNARY},
+    [TOKEN_MINUS_MINUS]   = {pre, post, PREC_POSTFIX},
+    [TOKEN_PLUS_PLUS]     = {pre, post, PREC_POSTFIX},
     [TOKEN_EQUAL]         = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_PLUS_EQUAL]    = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_MINUS_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},

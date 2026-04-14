@@ -15,6 +15,8 @@
     X(AST_IDENTIFIER)   \
     X(AST_UNARY)        \
     X(AST_BINARY)       \
+    X(AST_PRE)       \
+    X(AST_POST)      \
     X(AST_ASSIGNMENT)   \
     /* Statements */    \
     X(AST_EXPR_STMT)    \
