@@ -85,7 +85,7 @@ static void error(struct token *tok, const char *message)
 {
     int col = (int)(tok->start - tok->line_start);
 
-    fprintf(stderr, "(Sema) Error at line %d, col %d: %s", tok->line, col, message);
+    fprintf(stderr, "Error at line %d, col %d: %s", tok->line, col, message);
 
     const char *line_end = tok->line_start;
     while (*line_end != '\0' && *line_end != '\n')

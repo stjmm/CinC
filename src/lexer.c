@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 
@@ -36,6 +37,12 @@ static char peek(void)
     return *lexer_state.current;
 }
 
+static char peek_next(void)
+{
+    if (is_at_end()) return '\0';
+    return lexer_state.current[1];
+}
+
 static bool match(char expected)
 {
     if (is_at_end()) return false;
@@ -70,6 +77,27 @@ static struct token make_token(enum token_type type)
     return tok;
 }
 
+// Returns next token or error
+static struct token block_comment(void)
+{
+    while (!is_at_end()) {
+        if (peek() == '*' && peek_next() == '/') {
+            advance();
+            advance();
+            return lexer_next_token();
+        }
+        if (peek() == '\n') {
+            lexer_state.line++;
+            advance();
+            lexer_state.line_start = lexer_state.current;
+        } else {
+            advance();
+        }
+    }
+
+    return make_token(TOKEN_ERROR);
+}
+
 static void skip_whitespace(void)
 {
     for (;;) {
@@ -85,6 +113,13 @@ static void skip_whitespace(void)
                 advance();
                 lexer_state.line++;
                 lexer_state.line_start = lexer_state.current;
+                break;
+            case '/':
+                if (peek_next() == '/')
+                    while (peek() != '\n' && !is_at_end())
+                        advance();
+                else
+                    return;
                 break;
             default:
                 return;
@@ -143,14 +178,24 @@ struct token lexer_next_token()
         case '}': return make_token(TOKEN_RIGHT_BRACE);
         case '+':
             if (match('+')) return make_token(TOKEN_PLUS_PLUS);
+            else if (match('=')) return make_token(TOKEN_PLUS_EQUAL);
             else return make_token(TOKEN_PLUS);
         case '-':
             if (match('-')) return make_token(TOKEN_MINUS_MINUS);
+            else if (match('=')) return make_token(TOKEN_MINUS_EQUAL);
             else return make_token(TOKEN_MINUS);
-        case '*': return make_token(TOKEN_STAR);
-        case '/': return make_token(TOKEN_SLASH);
-        case '%': return make_token(TOKEN_PERCENT);
-        case '~': return make_token(TOKEN_TILDE);
+        case '*':
+            if (match('=')) return make_token(TOKEN_STAR_EQUAL);
+            else return make_token(TOKEN_STAR);
+        case '/': 
+            if (match('=')) return make_token(TOKEN_SLASH_EQUAL);
+            else if (match('*')) return block_comment();
+            else return make_token(TOKEN_SLASH);
+        case '%': 
+            if (match('=')) return make_token(TOKEN_PERCENT_EQUAL);
+            else return make_token(TOKEN_PERCENT);
+        case '~':
+            return make_token(TOKEN_TILDE);
         case '=':
             if (match('=')) return make_token(TOKEN_EQUAL_EQUAL);
             else return make_token(TOKEN_EQUAL);
@@ -159,17 +204,28 @@ struct token lexer_next_token()
             else return make_token(TOKEN_BANG);
         case '&':
             if (match('&')) return make_token(TOKEN_AND_AND);
+            else if (match('=')) return make_token(TOKEN_AND_EQUAL);
             else return make_token(TOKEN_AND);
         case '|':
             if (match('|')) return make_token(TOKEN_OR_OR);
+            else if (match('=')) return make_token(TOKEN_OR_EQUAL);
             else return make_token(TOKEN_OR);
+        case '^':
+            if (match('=')) return make_token(TOKEN_CARET_EQUAL);
+            else return make_token(TOKEN_CARET);
         case '<':
             if (match('=')) return make_token(TOKEN_LESS_EQUAL);
-            else if (match('<')) return make_token(TOKEN_LESS_LESS);
+            else if (match('<')) {
+                if (match('=')) return make_token(TOKEN_LESS_LESS_EQUAL);
+                else return make_token(TOKEN_LESS_LESS);
+            }
             else return make_token(TOKEN_LESS);
         case '>':
             if (match('=')) return make_token(TOKEN_GREATER_EQUAL);
-            else if (match('>')) return make_token(TOKEN_GREATER_GREATER);
+            else if (match('>')) {
+                if (match('=')) return make_token(TOKEN_GREATER_GREATER_EQUAL);
+                return make_token(TOKEN_GREATER_GREATER);
+            }
             else return make_token(TOKEN_GREATER);
         case ';': return make_token(TOKEN_SEMICOLON);
     }

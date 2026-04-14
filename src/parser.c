@@ -16,10 +16,11 @@ struct parser {
 typedef struct ast_node* (*prefix_parse_fn)(void);
 typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
 
+/* https://en.cppreference.com/w/c/language/operator_precedence.html */
 enum precedence {
     PREC_NONE,
-    PREC_ASSIGNMENT,    // =
-    PREC_OR,            // ||
+    PREC_ASSIGNMENT,    // = +=
+    PREC_OR,            // || 
     PREC_AND,           // &&
     PREC_BITWISE_OR,    // |
     PREC_BITWISE_XOR,   // ^
@@ -220,6 +221,16 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_MINUS_MINUS]   = {NULL, NULL, PREC_UNARY},
     [TOKEN_PLUS_PLUS]     = {NULL, NULL, PREC_UNARY},
     [TOKEN_EQUAL]         = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_PLUS_EQUAL]    = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_MINUS_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_STAR_EQUAL]    = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_SLASH_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_PERCENT_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_AND_EQUAL]     = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_OR_EQUAL]      = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_CARET_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_LESS_LESS_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_GREATER_GREATER_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_EQUAL_EQUAL]   = {NULL, binary, PREC_EQUALITY},
     [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
     [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},

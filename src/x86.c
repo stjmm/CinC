@@ -528,7 +528,7 @@ static const char *asm_op_str(enum asm_op op)
         case ASM_OR:   return "orl";
         case ASM_XOR:  return "xorl";
         case ASM_SHL:  return "shll";
-        case ASM_SHR:  return "shrl";
+        case ASM_SHR:  return "sarl";
         case ASM_NEG:  return "negl";
         case ASM_NOT:  return "notl";
         default:       return "???";
@@ -645,8 +645,6 @@ void emit_x86(struct ir_program *ir, FILE *file)
         }
         instr = instr->next;
     }
-
-    // Additional return if not in code
     
     fprintf(file, "\n    .section .note.GNU-stack,\"\",@progbits\n");
 }

@@ -27,6 +27,16 @@
     X(TOKEN_PLUS_PLUS)            \
     X(TOKEN_BANG)                 \
     X(TOKEN_BANG_EQUAL)           \
+    X(TOKEN_PLUS_EQUAL)           \
+    X(TOKEN_MINUS_EQUAL)          \
+    X(TOKEN_STAR_EQUAL)           \
+    X(TOKEN_SLASH_EQUAL)          \
+    X(TOKEN_PERCENT_EQUAL)        \
+    X(TOKEN_CARET_EQUAL)          \
+    X(TOKEN_AND_EQUAL)            \
+    X(TOKEN_OR_EQUAL)             \
+    X(TOKEN_LESS_LESS_EQUAL)      \
+    X(TOKEN_GREATER_GREATER_EQUAL)\
     X(TOKEN_AND)                  \
     X(TOKEN_AND_AND)              \
     X(TOKEN_OR)                   \

@@ -191,10 +191,29 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
             return dst;
         }
         case AST_ASSIGNMENT: {
+            if (expr->token.type == TOKEN_EQUAL) {
+                struct ir_val lvalue = make_var(&expr->assignment.lvalue->token);
+                struct ir_val rvalue = emit_expr(expr->assignment.rvalue, fn);
+                emit_copy(fn, rvalue, lvalue);
+                return lvalue;
+            }
+
+            // Otherwise compound assignment
             struct ir_val lvalue = make_var(&expr->assignment.lvalue->token);
             struct ir_val rvalue = emit_expr(expr->assignment.rvalue, fn);
-            emit_copy(fn, rvalue, lvalue);
-            return lvalue;
+            struct ir_val dst = make_temp();
+
+            struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+            *instr = (struct ir_instr){
+                .type = IR_BINARY,
+                .binary.op = convert_binop(expr->token),
+                .binary.src1 = lvalue,
+                .binary.src2 = rvalue,
+                .binary.dst = dst,
+            };
+            append_instr(fn, instr);
+            emit_copy(fn, dst, lvalue);
+            return dst;
         }
         default:
             fprintf(stderr, "tacky_emit: unhandled expr kind\n");
@@ -242,6 +261,15 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
 
     for (struct ast_node *item = fn_node->function.body->block.first; item != NULL; item = item->next)
         emit_block_item(item, fn);
+
+
+    struct ir_val src = make_constant(0);
+    struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+    *instr = (struct ir_instr){
+        .type = IR_RETURN,
+        .ret.src = src
+    };
+    append_instr(fn, instr);
 
     return fn;
 }
