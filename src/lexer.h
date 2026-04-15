@@ -13,6 +13,8 @@
     X(TOKEN_LEFT_BRACKET)         \
     X(TOKEN_RIGHT_BRACKET)        \
     X(TOKEN_SEMICOLON)            \
+    X(TOKEN_COLON)                \
+    X(TOKEN_QUESTION_MARK)        \
     /* One or two char tokens */  \
     X(TOKEN_PLUS)                 \
     X(TOKEN_MINUS)                \
@@ -54,6 +56,8 @@
     X(TOKEN_INT)                  \
     X(TOKEN_VOID)                 \
     X(TOKEN_RETURN)               \
+    X(TOKEN_IF)                   \
+    X(TOKEN_ELSE)                 \
     /* Misc */                    \
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  

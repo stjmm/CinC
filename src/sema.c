@@ -85,7 +85,7 @@ static void error(struct token *tok, const char *message)
 {
     int col = (int)(tok->start - tok->line_start);
 
-    fprintf(stderr, "Error at line %d, col %d: %s", tok->line, col, message);
+    fprintf(stderr, "Error at line %d, col %d: %s\n", tok->line, col, message);
 
     const char *line_end = tok->line_start;
     while (*line_end != '\0' && *line_end != '\n')
@@ -101,6 +101,7 @@ static void error(struct token *tok, const char *message)
 }
 
 static struct ast_node *resolve_block(struct ast_node *block, struct scope *parent);
+static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s);
 
 static struct ast_node *resolve_expr(struct ast_node *expr, struct scope *s)
 {
@@ -141,6 +142,11 @@ static struct ast_node *resolve_expr(struct ast_node *expr, struct scope *s)
             return expr;
 
         }
+        case AST_TERNARY:
+            expr->ternary.condition = resolve_expr(expr->ternary.condition, s);
+            expr->ternary.then = resolve_expr(expr->ternary.then, s);
+            expr->ternary.else_then = resolve_expr(expr->ternary.else_then, s);
+            return expr;
         case AST_CONSTANT:
             return expr;
         case AST_BINARY:
@@ -189,6 +195,12 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             break;
         case AST_NULL_STMT:
             return stmt;
+            break;
+        case AST_IF_STMT:
+            stmt->if_stmt.condition = resolve_expr(stmt->if_stmt.condition, s);
+            stmt->if_stmt.then = resolve_statement(stmt->if_stmt.then, s);
+            if (stmt->if_stmt.else_then)
+                stmt->if_stmt.else_then = resolve_statement(stmt->if_stmt.else_then, s);
             break;
         case AST_BLOCK:
             return resolve_block(stmt, s);

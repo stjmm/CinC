@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 
@@ -147,7 +146,14 @@ static enum token_type check_keyword(unsigned int start, unsigned int length,
 static enum token_type identifier_type(void)
 {
     switch (lexer_state.start[0]) {
-        case 'i': return check_keyword(1, 2, "nt", TOKEN_INT);
+        case 'e': return check_keyword(1, 3, "lse", TOKEN_ELSE);
+        case 'i': 
+            if (lexer_state.current - lexer_state.start > 1)
+                switch (lexer_state.start[1]) {
+                    case 'f': return TOKEN_IF;
+                    case 'n': return check_keyword(2, 1, "t", TOKEN_INT);
+                }
+            break;
         case 'r': return check_keyword(1, 5, "eturn", TOKEN_RETURN);
         case 'v': return check_keyword(1, 3, "oid", TOKEN_VOID);
     }
@@ -228,6 +234,8 @@ struct token lexer_next_token()
             }
             else return make_token(TOKEN_GREATER);
         case ';': return make_token(TOKEN_SEMICOLON);
+        case ':': return make_token(TOKEN_COLON);
+        case '?': return make_token(TOKEN_QUESTION_MARK);
     }
 
     return make_token(TOKEN_ERROR);

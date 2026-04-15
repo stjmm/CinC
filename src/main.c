@@ -38,15 +38,15 @@ static void parse_args(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    parse_args(argc, argv);
     const char *program_source = read_file(argv[1]);
 
-    /* LEXER PHASE */
-
-    /* PARSER/AST PHASE */
+    /* LEXER/PARSER PHASE */
     struct ast_node *root = parse_translation_unit(program_source);
     if (!root)
         exit(1);
 
+    /* SEMANTICAL ANALYSIS */
     root = sema_analysis(root);
     if (!root)
         exit(1);
@@ -61,6 +61,5 @@ int main(int argc, char **argv)
     emit_x86(ir, file);
 
     fclose(file);
-
     return 0;
 }

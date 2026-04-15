@@ -15,13 +15,15 @@
     X(AST_IDENTIFIER)   \
     X(AST_UNARY)        \
     X(AST_BINARY)       \
-    X(AST_PRE)       \
-    X(AST_POST)      \
+    X(AST_PRE)          \
+    X(AST_POST)         \
     X(AST_ASSIGNMENT)   \
+    X(AST_TERNARY)      \
     /* Statements */    \
     X(AST_EXPR_STMT)    \
     X(AST_NULL_STMT)    \
     X(AST_RETURN)       \
+    X(AST_IF_STMT)      \
     X(AST_BLOCK)        \
     /* Declarations */  \
     X(AST_DECLARATION)  \
@@ -50,9 +52,19 @@ struct ast_node {
             struct ast_node *lvalue;
             struct ast_node *rvalue;
         } assignment;
+        struct {
+            struct ast_node *condition;
+            struct ast_node *then;
+            struct ast_node *else_then;
+        } ternary;
 
         struct { struct ast_node *expr; } expr_stmt;
         struct { struct ast_node *expr; } return_stmt;
+        struct {
+            struct ast_node *condition;
+            struct ast_node *then;
+            struct ast_node *else_then;
+        } if_stmt;
         struct { struct ast_node *first; } block;
 
         struct {

@@ -16,10 +16,10 @@ struct parser {
 typedef struct ast_node* (*prefix_parse_fn)(void);
 typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
 
-/* https://en.cppreference.com/w/c/language/operator_precedence.html */
 enum precedence {
     PREC_NONE,
     PREC_ASSIGNMENT,    // = +=
+    PREC_TERNARY,       // ?:
     PREC_OR,            // || 
     PREC_AND,           // &&
     PREC_BITWISE_OR,    // |
@@ -88,6 +88,8 @@ static void synchronize_block_item(void)
         switch (parser_state.current.type) {
             case TOKEN_INT:
             case TOKEN_RETURN:
+            case TOKEN_IF:
+            case TOKEN_ELSE:
                 return;
             default:
                 break;
@@ -216,6 +218,26 @@ static struct ast_node *post(struct ast_node *left)
     return AST_NEW(AST_POST, op, .unary.expr = left);
 }
 
+static struct ast_node *ternary(struct ast_node *left)
+{
+    struct token ternary_tok = parser_state.previous;
+    
+    struct ast_node *then = parse_expression(PREC_ASSIGNMENT);
+    if (!then)
+        return NULL;
+
+    consume(TOKEN_COLON, "Expected ':' after conditional expression");
+    struct ast_node *else_then = parse_expression(PREC_TERNARY);
+    if (!else_then)
+        return NULL;
+
+    return AST_NEW(AST_TERNARY, ternary_tok,
+            .ternary.condition = left,
+            .ternary.then = then,
+            .ternary.else_then = else_then,
+    );
+}
+
 static struct parse_rule parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
@@ -224,6 +246,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
     [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
+    [TOKEN_QUESTION_MARK] = {NULL, ternary, PREC_TERNARY},
     [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
     [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
     [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
@@ -289,6 +312,8 @@ static struct ast_node *parse_expression(enum precedence prec)
     return left;
 }
 
+static struct ast_node *parse_block(void);
+
 static struct ast_node *parse_expr_stmt(void)
 {
     if (match(TOKEN_SEMICOLON))
@@ -305,6 +330,10 @@ static struct ast_node *parse_expr_stmt(void)
 
 static struct ast_node *parse_statement(void)
 {
+    if (match(TOKEN_LEFT_BRACE)) {
+        return parse_block(); // block/compound-statement
+    }
+
     if (match(TOKEN_RETURN)) {
         struct token return_tok = parser_state.previous;
         struct ast_node *expr = NULL;
@@ -317,6 +346,30 @@ static struct ast_node *parse_statement(void)
 
         consume(TOKEN_SEMICOLON, "Expected ';' after return value");
         return AST_NEW(AST_RETURN, return_tok, .return_stmt.expr = expr);
+    }
+    
+    if (match(TOKEN_IF)) {
+        struct token if_tok = parser_state.previous;
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'if'");
+        struct ast_node *cond = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'if' condition");
+
+        if (check(TOKEN_ELSE) || check(TOKEN_RIGHT_BRACE) || check(TOKEN_EOF)) {
+            error(&parser_state.previous, "Expected statement after 'if'");
+            return NULL;
+        }
+        struct ast_node *then = parse_statement();
+        if (!then) return NULL;
+
+        struct ast_node *else_then = NULL;
+        if (match(TOKEN_ELSE))
+            else_then = parse_statement();
+
+        return AST_NEW(AST_IF_STMT, if_tok,
+                .if_stmt.condition = cond,
+                .if_stmt.then = then,
+                .if_stmt.else_then = else_then
+        );
     }
 
     return parse_expr_stmt();
