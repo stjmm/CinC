@@ -250,6 +250,25 @@ static struct ir_val emit_expr(struct ast_node *expr, struct ir_function *fn)
             append_instr(fn, instr);
             return expr->type == AST_PRE ? lvalue : old_lval;
         }
+        case AST_TERNARY: {
+            int e2_label = make_label();
+            int end_label = make_label();
+            struct ir_val dst = make_temp();
+
+            struct ir_val cond_result = emit_expr(expr->ternary.condition, fn);
+            emit_jump_cond(fn, cond_result, e2_label, IR_JUMP_IF_ZERO);
+
+            struct ir_val v1 = emit_expr(expr->ternary.then, fn);
+            emit_copy(fn, v1, dst);
+            emit_jump(fn, end_label);
+
+            emit_label(fn, e2_label);
+            struct ir_val v2 = emit_expr(expr->ternary.else_then, fn);
+            emit_copy(fn, v2, dst);
+
+            emit_label(fn, end_label);
+            return dst;
+        }
         default:
             fprintf(stderr, "tacky_emit: unhandled expr kind\n");
             exit(1);
@@ -277,6 +296,36 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             }
             break;
         }
+        case AST_IF_STMT: {
+            struct ir_val cond = emit_expr(node->if_stmt.condition, fn);
+            if (!node->if_stmt.else_then) {
+                int end_label = make_label();
+
+                emit_jump_cond(fn, cond, end_label, IR_JUMP_IF_ZERO);
+                
+                emit_block_item(node->if_stmt.then, fn);
+
+                emit_label(fn, end_label);
+            } else {
+                int end_label = make_label();
+                int else_label = make_label();
+
+                emit_jump_cond(fn, cond, else_label, IR_JUMP_IF_ZERO);
+
+                emit_block_item(node->if_stmt.then, fn);
+                emit_jump(fn, end_label);
+
+                emit_label(fn, else_label);
+                emit_block_item(node->if_stmt.else_then, fn);
+
+                emit_label(fn, end_label);
+            }
+            break;
+        }
+        case AST_BLOCK:
+            for (struct ast_node *item = node->block.first; item != NULL; item = item->next)
+                emit_block_item(item, fn);
+            break;
         case AST_EXPR_STMT:
             emit_expr(node->expr_stmt.expr, fn);
             break;
