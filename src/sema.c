@@ -18,6 +18,8 @@ struct scope {
     hash_map symbols;
 };
 
+static hash_map labels;
+
 static int unique_counter = 0;
 static bool had_error = false;
 
@@ -92,6 +94,8 @@ static void error(struct token *tok, const char *message)
 
     had_error = true;
 }
+
+/* Variable Resolution */
 
 static struct ast_node *resolve_block(struct ast_node *block, struct scope *parent);
 static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s);
@@ -197,6 +201,12 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             break;
         case AST_BLOCK:
             return resolve_block(stmt, s);
+        case AST_GOTO: {
+            struct token *tok = &stmt->goto_stmt.label;
+            if (!hm_get(&labels, tok->start, tok->length))
+                error(tok, "Use of undeclared label");
+            break;
+        }
         default:
             ;
     }
@@ -219,9 +229,53 @@ static struct ast_node *resolve_block(struct ast_node *block, struct scope *pare
     return block;
 }
 
+/* goto and labels resolution */
+
+static void collect_labels(struct ast_node *node)
+{
+    if (!node)
+        return;
+
+    switch (node->type) {
+        case AST_LABEL_STMT: {
+            struct token *tok = &node->label_stmt.name;
+            if (hm_get(&labels, tok->start, tok->length))
+                error(tok, "Duplicate label defnintion");
+            else
+                hm_set(&labels, tok->start, tok->length, node);
+
+            // if (node->next == NULL)
+            //     error(tok, "Label at the end of a block must be followed by a statement");
+
+            // TODO: Which standard?
+            // C23 allows this...
+            if (node->next != NULL && node->next->type == AST_DECLARATION)
+                error(tok, "Label cannot be followed by a declaration");
+            break;
+        }
+        case AST_BLOCK: {
+            for (struct ast_node *item = node->block.first; item; item = item->next)
+                collect_labels(item);
+            break;
+        }
+        case AST_IF_STMT: {
+            collect_labels(node->if_stmt.then);
+            collect_labels(node->if_stmt.else_then);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 static struct ast_node *resolve_function(struct ast_node *fn)
 {
-    resolve_block(fn->function.body, NULL);
+    hm_init(&labels);
+
+    collect_labels(fn->function.body); // gotos, labels resolution
+    resolve_block(fn->function.body, NULL); // variable resolution
+
+    hm_free(&labels);
     return fn;
 }
 

@@ -6,6 +6,9 @@
 #include "ir.h"
 #include "ast.h"
 #include "lexer.h"
+#include "base/hash_map.h"
+
+static hash_map goto_labels;
 
 static struct ir_val make_constant(long c) 
 {
@@ -30,7 +33,7 @@ static struct ir_val make_var(struct token *tok)
 
 static int make_label(void)
 {
-    static int label_id = 0;
+    static int label_id = 1;
     return label_id++;
 }
 
@@ -77,6 +80,24 @@ static enum ir_binary_op convert_binop(struct token tok)
         case TOKEN_GREATER_GREATER_EQUAL:return IR_SHIFT_RIGHT;
         default: fprintf(stderr, "unknown binop\n"); exit(1);
     }
+}
+
+static int get_or_create_label_id(const char *name, int len)
+{
+    void *value = hm_get(&goto_labels, name, len);
+    if (value)
+        return (int)(intptr_t)value;
+
+    int id = make_label();
+    hm_set(&goto_labels, name, len, (void *)(intptr_t)(id)); // id + 1 so its never stored as NULL
+    return id;
+}
+
+static struct ir_instr *alloc_instr(enum ir_instr_type type)
+{
+    struct ir_instr *i = calloc(1, sizeof(struct ir_instr));
+    i->type = type;
+    return i;
 }
 
 static void append_instr(struct ir_function *fn, struct ir_instr *instr)
@@ -331,6 +352,18 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             break;
         case AST_NULL_STMT:
             break;
+        case AST_GOTO: {
+            struct token *tok = &node->goto_stmt.label;
+            int label_id = get_or_create_label_id(tok->start, tok->length);
+            emit_jump(fn, label_id);
+            break;
+        }
+        case AST_LABEL_STMT: {
+            struct token *tok = &node->label_stmt.name;
+            int label_id = get_or_create_label_id(tok->start, tok->length);
+            emit_label(fn, label_id);
+            break;
+        }
         default:
             fprintf(stderr, "unhandled stmt kind\n");
             exit(1);
@@ -342,6 +375,7 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     struct ir_function *fn = calloc(1, sizeof(struct ir_function));
     fn->name = fn_node->token.start;
     fn->name_length = fn_node->token.length;
+    hm_init(&goto_labels);
 
     for (struct ast_node *item = fn_node->function.body->block.first; item != NULL; item = item->next)
         emit_block_item(item, fn);
@@ -355,6 +389,7 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     };
     append_instr(fn, instr);
 
+    hm_free(&goto_labels);
     return fn;
 }
 

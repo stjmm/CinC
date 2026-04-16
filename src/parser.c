@@ -331,7 +331,7 @@ static struct ast_node *parse_expr_stmt(void)
 static struct ast_node *parse_statement(void)
 {
     if (match(TOKEN_LEFT_BRACE)) {
-        return parse_block(); // block/compound-statement
+        return parse_block();
     }
 
     if (match(TOKEN_RETURN)) {

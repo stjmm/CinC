@@ -68,7 +68,10 @@ struct ast_node {
             struct ast_node *else_then;
         } if_stmt;
         struct { struct token label; } goto_stmt;
-        struct { struct token name; } label_stmt;
+        struct {
+            struct token name;
+            struct ast_node *stmt;
+        } label_stmt;
         struct { struct ast_node *first; } block;
 
         struct {
