@@ -25,6 +25,8 @@
     X(AST_RETURN)       \
     X(AST_IF_STMT)      \
     X(AST_BLOCK)        \
+    X(AST_GOTO)         \
+    X(AST_LABEL_STMT)   \
     /* Declarations */  \
     X(AST_DECLARATION)  \
     X(AST_FUNCTION)     \
@@ -65,6 +67,8 @@ struct ast_node {
             struct ast_node *then;
             struct ast_node *else_then;
         } if_stmt;
+        struct { struct token label; } goto_stmt;
+        struct { struct token name; } label_stmt;
         struct { struct ast_node *first; } block;
 
         struct {

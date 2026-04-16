@@ -5,6 +5,7 @@
 
 #include "sema.h"
 #include "ast.h"
+#include "base/hash_map.h"
 
 struct symbol {
     const char *name;
@@ -14,8 +15,7 @@ struct symbol {
 
 struct scope {
     struct scope *parent;
-    struct symbol symbols[128];
-    int count;
+    hash_map symbols;
 };
 
 static int unique_counter = 0;
@@ -24,6 +24,7 @@ static bool had_error = false;
 static struct scope *scope_push(struct scope *parent)
 {
     struct scope *s = calloc(1, sizeof(struct scope));
+    hm_init(&s->symbols);
     s->parent = parent;
     return s;
 }
@@ -31,25 +32,15 @@ static struct scope *scope_push(struct scope *parent)
 static struct scope *scope_pop(struct scope *s)
 {
     struct scope *parent = s->parent;
+    hm_free(&s->symbols);
     free(s);
     return parent;
-}
-
-static struct symbol *scope_find_local(struct scope *s, const char *name, int length)
-{
-    for (int i = 0; i < s->count; i++) {
-        struct symbol *sym = &s->symbols[i];
-        if (sym->length == length && memcmp(sym->name, name, length) == 0)
-            return sym;
-    }
-
-    return NULL;
 }
 
 static struct symbol *scope_resolve(struct scope *s, const char *name, int length)
 {
     for (struct scope *scp = s; scp != NULL; scp = scp->parent) {
-        struct symbol *sym = scope_find_local(scp, name, length);
+        struct symbol *sym = hm_get(&scp->symbols, name, length);
         if (sym)
             return sym;
     }
@@ -60,15 +51,17 @@ static struct symbol *scope_resolve(struct scope *s, const char *name, int lengt
 // Returns 0 on succes, -1 if already exists
 static int scope_declare(struct scope *s, const char *name, int length, char *unique_name)
 {
-    if (scope_find_local(s, name, length))
+    if (hm_get(&s->symbols, name, length))
         return -1;
 
-    s->symbols[s->count++] = (struct symbol) {
+    struct symbol *sym = malloc(sizeof(struct symbol));
+    *sym = (struct symbol) {
         .name = name,
         .length = length,
         .unique_name = unique_name,
     };
 
+    hm_set(&s->symbols, name, length, sym);
     return 0;
 }
 

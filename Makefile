@@ -4,8 +4,8 @@ CFLAGS=-Wall -Wextra -std=c11
 BUILD=build
 EXE=$(BUILD)/cinc
 
-SRC=$(wildcard src/*.c)
-OBJ=$(SRC:src/%.c=$(BUILD)/%.o)
+SRC=$(shell find src -name '*.c')
+OBJ=$(patsubst src/%.c,$(BUILD)/%.o,$(SRC))
 DEP=$(OBJ:.o=.d)
 
 all: debug
@@ -17,7 +17,7 @@ release: CFLAGS += -O3 -DNDEBUG
 release: $(EXE)
 
 $(BUILD)/%.o: src/%.c
-	@mkdir -p $(BUILD)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 $(EXE): $(OBJ)

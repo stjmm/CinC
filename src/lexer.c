@@ -147,6 +147,7 @@ static enum token_type identifier_type(void)
 {
     switch (lexer_state.start[0]) {
         case 'e': return check_keyword(1, 3, "lse", TOKEN_ELSE);
+        case 'g': return check_keyword(1, 3, "oto", TOKEN_GOTO);
         case 'i': 
             if (lexer_state.current - lexer_state.start > 1)
                 switch (lexer_state.start[1]) {

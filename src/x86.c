@@ -6,6 +6,7 @@
 
 #include "x86.h"
 #include "ir.h"
+#include "base/hash_map.h"
 
 /* Phase 1: Convert TACKY IR to ASM AST. Keeps temporary variables (pseduos) */
 
@@ -312,25 +313,25 @@ struct pseudo_entry {
 };
 
 struct pseudo_map {
-    struct pseudo_entry entries[128];
-    int count;
+    hash_map entries;
     int current_offset;
 };
 
 static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name, int length)
 {
-    for (int i = 0; i < pm->count; i++) {
-        struct pseudo_entry *e = &pm->entries[i];
-        if (e->length == length && memcmp(e->name, name, length) == 0)
-            return e->stack_offset;
-    }
+    struct pseudo_entry *e = hm_get(&pm->entries, name, length);
+    if (e)
+        return e->stack_offset;
 
     pm->current_offset -= 4;
-    pm->entries[pm->count++] = (struct pseudo_entry){
+    e = malloc(sizeof(struct pseudo_entry));
+    *e = (struct pseudo_entry){
         .name         = name,
         .length       = length,
         .stack_offset = pm->current_offset,
     };
+    hm_set(&pm->entries, name, length, e);
+
     return pm->current_offset;
 }
 
@@ -347,6 +348,7 @@ static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
 static int asm_phase2(struct asm_program *program)
 {
     struct pseudo_map pm = {0};
+    hm_init(&pm.entries);
 
     struct asm_function *fn = program->function;
     for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {

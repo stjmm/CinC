@@ -58,6 +58,7 @@
     X(TOKEN_RETURN)               \
     X(TOKEN_IF)                   \
     X(TOKEN_ELSE)                 \
+    X(TOKEN_GOTO)                 \
     /* Misc */                    \
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  

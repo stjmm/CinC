@@ -7,8 +7,8 @@
 #include "lexer.h"
 
 struct parser {
-    struct token current;
     struct token previous;
+    struct token current;
     bool had_error;
     bool panic_mode;
 };
@@ -372,7 +372,33 @@ static struct ast_node *parse_statement(void)
         );
     }
 
-    return parse_expr_stmt();
+    if (match(TOKEN_GOTO)) {
+        struct token goto_tok = parser_state.previous;
+        consume(TOKEN_IDENTIFIER, "Expected label after 'goto'");
+        struct token label = parser_state.previous;
+        consume(TOKEN_SEMICOLON, "Expected ';' after goto statement");
+
+        return AST_NEW(AST_GOTO, goto_tok, .goto_stmt.label = label);
+    }
+
+    /* Expression statements */
+    
+    if (match(TOKEN_SEMICOLON))
+        return AST_NEW(AST_NULL_STMT, parser_state.previous);
+
+    struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
+    if (!expr)
+        return NULL;
+
+    // goto label
+    if (expr->type == AST_IDENTIFIER) {
+        if (match(TOKEN_COLON)) {
+            return AST_NEW(AST_LABEL_STMT, expr->token, .label_stmt.name = expr->token);
+        }
+    }
+
+    consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
+    return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
 }
 
 static struct ast_node *parse_declaration(void)
