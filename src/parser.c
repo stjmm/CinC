@@ -384,10 +384,9 @@ static struct ast_node *parse_statement(void)
 
         // Either declaration, expression or empty
         struct ast_node *for_init = NULL;
-        if (check(TOKEN_INT)) {
-            advance();
+        if (match(TOKEN_INT)) {
             for_init = parse_declaration();
-        } else if(!match(TOKEN_SEMICOLON)) {
+        } else if (!match(TOKEN_SEMICOLON)) {
             for_init = parse_expression(PREC_ASSIGNMENT);
             if (!for_init)
                 return NULL;
@@ -404,20 +403,17 @@ static struct ast_node *parse_statement(void)
         }
 
         struct ast_node *post = NULL;
-        if (!match(TOKEN_SEMICOLON)) {
+        if (!check(TOKEN_RIGHT_PAREN)) {
             post = parse_expression(PREC_ASSIGNMENT);
             if (!post)
                 return NULL;
-            consume(TOKEN_SEMICOLON, "Expected ';' after for-condition");
         }
 
         consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'for' clauses");
 
         struct ast_node *body = parse_statement();
-        if (!body) {
-            error(&parser_state.previous, "Empty 'for' body");
+        if (!body)
             return NULL;
-        }
 
         return AST_NEW(AST_FOR, for_tok,
                 .for_stmt.for_init = for_init,
@@ -458,9 +454,11 @@ static struct ast_node *parse_statement(void)
 
         consume(TOKEN_WHILE, "Expected 'while' after 'do-while' body");
 
-        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'");
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'do-while'");
         struct ast_node *cond = parse_expression(PREC_ASSIGNMENT);
-        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'while' condition");
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'do-while' condition");
+
+        consume(TOKEN_SEMICOLON, "Expected ';' after 'do-while'");
 
         return AST_NEW(AST_DOWHILE, do_tok,
                 .do_while.body = body,
@@ -478,11 +476,15 @@ static struct ast_node *parse_statement(void)
         return AST_NEW(AST_GOTO, goto_tok, .goto_stmt.label = label);
     }
 
-    if (match(TOKEN_BREAK))
+    if (match(TOKEN_BREAK)) {
+        consume(TOKEN_SEMICOLON, "Expected ';' after 'break'");
         return AST_NEW(AST_BREAK, parser_state.previous, .break_stmt.target_label = NULL);
+    }
 
-    if (match(TOKEN_CONTINUE))
+    if (match(TOKEN_CONTINUE)) {
+        consume(TOKEN_SEMICOLON, "Expected ';' after 'continue'");
         return AST_NEW(AST_CONTINUE, parser_state.previous, .continue_stmt.target_label = NULL);
+    }
 
     /* Expression statements */
     

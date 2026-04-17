@@ -290,16 +290,25 @@ static void collect_labels(struct ast_node *node)
                 error(tok, "Label cannot be followed by a declaration");
             break;
         }
-        case AST_BLOCK: {
-            for (struct ast_node *item = node->block.first; item; item = item->next)
-                collect_labels(item);
-            break;
-        }
         case AST_IF_STMT: {
             collect_labels(node->if_stmt.then);
             collect_labels(node->if_stmt.else_then);
             break;
         }
+        case AST_BLOCK: {
+            for (struct ast_node *item = node->block.first; item; item = item->next)
+                collect_labels(item);
+            break;
+        }
+        case AST_FOR:
+            collect_labels(node->for_stmt.body);
+            break;
+        case AST_WHILE:
+            collect_labels(node->while_stmt.body);
+            break;
+        case AST_DOWHILE:
+            collect_labels(node->do_while.body);
+            break;
         default:
             break;
     }
@@ -307,48 +316,67 @@ static void collect_labels(struct ast_node *node)
 
 /* Loop labeling */
 
-static void label_loops(struct ast_node *node, struct loop_ctx *ctx)
+static void label_loops(struct ast_node *node, struct loop_ctx *ctx);
+
+static void label_loops_block(struct ast_node *node, struct loop_ctx *ctx)
 {
-    for (struct ast_node *s = node->block.first; s != NULL; s = s->next) {
-        switch(s->type) {
-            case AST_BREAK: {
-                if (!ctx)
-                    error(&s->token, "'break' statement outside of loop or switch");
-                else
-                    s->break_stmt.target_label = ctx->label;
-                break;
-            }
-            case AST_CONTINUE: {
-                if (!ctx)
-                    error(&s->token, "'continue' statement outside of loop or switch");
-                else
-                    s->continue_stmt.target_label = ctx->label;
-                break;
-            }
-            case AST_WHILE: {
-                char *lbl = make_unique("while", 5);
-                s->while_stmt.label = lbl;
-                struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
-                label_loops(s->while_stmt.body, &new_ctx);
-                break;
-            }
-            case AST_DOWHILE: {
-                char *lbl = make_unique("dowhile", 7);
-                s->do_while.label = lbl;
-                struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
-                label_loops(s->while_stmt.body, &new_ctx);
-                break;
-            }
-            case AST_FOR: {
-                char *lbl = make_unique("for", 3);
-                s->for_stmt.label = lbl;
-                struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
-                label_loops(s->for_stmt.body, &new_ctx);
-                break;
-            }
-            default:
-                break;
+    for (struct ast_node *item = node->block.first; item != NULL; item = item->next) {
+        label_loops(item, ctx);
+    }
+}
+
+static void label_loops(struct ast_node *stmt, struct loop_ctx *ctx)
+{
+    if (!stmt)
+        return;
+
+    switch(stmt->type) {
+        case AST_BREAK: {
+            if (!ctx)
+                error(&stmt->token, "'break' statement outside of loop or switch");
+            else
+                stmt->break_stmt.target_label = ctx->label;
+            break;
         }
+        case AST_CONTINUE: {
+            if (!ctx)
+                error(&stmt->token, "'continue' statement outside of loop or switch");
+            else
+                stmt->continue_stmt.target_label = ctx->label;
+            break;
+        }
+        case AST_WHILE: {
+            char *lbl = make_unique("while", 5);
+            stmt->while_stmt.label = lbl;
+            struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+            label_loops(stmt->while_stmt.body, &new_ctx);
+            break;
+        }
+        case AST_DOWHILE: {
+            char *lbl = make_unique("dowhile", 7);
+            stmt->do_while.label = lbl;
+            struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+            label_loops(stmt->do_while.body, &new_ctx);
+            break;
+        }
+        case AST_FOR: {
+            char *lbl = make_unique("for", 3);
+            stmt->for_stmt.label = lbl;
+            struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+            label_loops(stmt->for_stmt.body, &new_ctx);
+            break;
+        }
+        case AST_IF_STMT: {
+            label_loops(stmt->if_stmt.then, ctx);
+            label_loops(stmt->if_stmt.else_then, ctx);
+            break;
+        }
+        case AST_BLOCK: {
+            label_loops_block(stmt, ctx);
+            break;
+        }
+        default:
+            break;
     }
 }
 
