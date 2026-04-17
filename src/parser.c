@@ -313,7 +313,9 @@ static struct ast_node *parse_expression(enum precedence prec)
 }
 
 static struct ast_node *parse_block(void);
+static struct ast_node *parse_declaration(void);
 
+// Not used for now
 static struct ast_node *parse_expr_stmt(void)
 {
     if (match(TOKEN_SEMICOLON))
@@ -372,6 +374,101 @@ static struct ast_node *parse_statement(void)
         );
     }
 
+    if (match(TOKEN_SWITCH)) {
+
+    }
+
+    if (match(TOKEN_FOR)) {
+        struct token for_tok = parser_state.previous;
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'for'");
+
+        // Either declaration, expression or empty
+        struct ast_node *for_init = NULL;
+        if (check(TOKEN_INT)) {
+            advance();
+            for_init = parse_declaration();
+        } else if(!match(TOKEN_SEMICOLON)) {
+            for_init = parse_expression(PREC_ASSIGNMENT);
+            if (!for_init)
+                return NULL;
+            consume(TOKEN_SEMICOLON, "Expected ';' after for-init");
+        }
+
+        // Cond: optional
+        struct ast_node *condition = NULL;
+        if (!match(TOKEN_SEMICOLON)) {
+            condition = parse_expression(PREC_ASSIGNMENT);
+            if (!condition)
+                return NULL;
+            consume(TOKEN_SEMICOLON, "Expected ';' after for-condition");
+        }
+
+        struct ast_node *post = NULL;
+        if (!match(TOKEN_SEMICOLON)) {
+            post = parse_expression(PREC_ASSIGNMENT);
+            if (!post)
+                return NULL;
+            consume(TOKEN_SEMICOLON, "Expected ';' after for-condition");
+        }
+
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'for' clauses");
+
+        struct ast_node *body = parse_statement();
+        if (!body) {
+            error(&parser_state.previous, "Empty 'for' body");
+            return NULL;
+        }
+
+        return AST_NEW(AST_FOR, for_tok,
+                .for_stmt.for_init = for_init,
+                .for_stmt.condition = condition,
+                .for_stmt.post = post,
+                .for_stmt.body = body,
+                .for_stmt.label = NULL
+        );
+    }
+
+    if (match(TOKEN_WHILE)) {
+        struct token while_tok = parser_state.previous;
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'");
+        struct ast_node *cond = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'while' condition");
+
+        struct ast_node *body = parse_statement();
+        if (!body) {
+            error(&parser_state.previous, "Empty 'while' loop body");
+            return NULL;
+        }
+
+        return AST_NEW(AST_WHILE, while_tok,
+                .while_stmt.condition = cond,
+                .while_stmt.body = body,
+                .while_stmt.label = NULL
+        );
+    }
+
+    if (match(TOKEN_DO)) {
+        struct token do_tok = parser_state.previous;
+
+        struct ast_node *body = parse_statement();
+        if (!body) {
+            error(&parser_state.previous, "Empty 'do-while' loop body");
+            return NULL;
+        }
+
+        consume(TOKEN_WHILE, "Expected 'while' after 'do-while' body");
+
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'");
+        struct ast_node *cond = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'while' condition");
+
+        return AST_NEW(AST_DOWHILE, do_tok,
+                .do_while.body = body,
+                .do_while.condition = cond,
+                .do_while.label = NULL
+        );
+    }
+
     if (match(TOKEN_GOTO)) {
         struct token goto_tok = parser_state.previous;
         consume(TOKEN_IDENTIFIER, "Expected label after 'goto'");
@@ -380,6 +477,12 @@ static struct ast_node *parse_statement(void)
 
         return AST_NEW(AST_GOTO, goto_tok, .goto_stmt.label = label);
     }
+
+    if (match(TOKEN_BREAK))
+        return AST_NEW(AST_BREAK, parser_state.previous, .break_stmt.target_label = NULL);
+
+    if (match(TOKEN_CONTINUE))
+        return AST_NEW(AST_CONTINUE, parser_state.previous, .continue_stmt.target_label = NULL);
 
     /* Expression statements */
     

@@ -59,6 +59,13 @@
     X(TOKEN_IF)                   \
     X(TOKEN_ELSE)                 \
     X(TOKEN_GOTO)                 \
+    X(TOKEN_WHILE)                \
+    X(TOKEN_DO)                   \
+    X(TOKEN_FOR)                  \
+    X(TOKEN_BREAK)                \
+    X(TOKEN_CONTINUE)             \
+    X(TOKEN_SWITCH)               \
+    X(TOKEN_DEFAULT)              \
     /* Misc */                    \
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  

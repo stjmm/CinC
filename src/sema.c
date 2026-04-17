@@ -18,8 +18,12 @@ struct scope {
     hash_map symbols;
 };
 
-static hash_map labels;
+struct loop_ctx {
+    const char *label;
+    struct loop_ctx *prev;
+};
 
+static hash_map labels;
 static int unique_counter = 0;
 static bool had_error = false;
 
@@ -199,6 +203,38 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             if (stmt->if_stmt.else_then)
                 stmt->if_stmt.else_then = resolve_statement(stmt->if_stmt.else_then, s);
             break;
+        case AST_FOR: {
+            struct scope *new_scope = scope_push(s);
+            struct ast_node *for_init = stmt->for_stmt.for_init;
+            if (for_init) {
+                if (for_init->type == AST_DECLARATION)
+                    for_init = resolve_declaration(for_init, new_scope);
+                else
+                    for_init = resolve_expr(for_init, new_scope);
+            }
+
+            struct ast_node *condition = stmt->for_stmt.condition;
+            if (condition)
+                condition = resolve_expr(condition, new_scope);
+
+            struct ast_node *post = stmt->for_stmt.post;
+            if (post)
+                post = resolve_expr(post, new_scope);
+
+            stmt->for_stmt.body = resolve_statement(stmt->for_stmt.body, new_scope);
+            scope_pop(new_scope);
+            break;
+        }
+        case AST_WHILE: {
+            stmt->while_stmt.condition = resolve_expr(stmt->while_stmt.condition, s);
+            stmt->while_stmt.body = resolve_statement(stmt->while_stmt.body, s);
+            break;
+        }
+        case AST_DOWHILE: {
+            stmt->do_while.body = resolve_statement(stmt->do_while.body, s);
+            stmt->do_while.condition = resolve_expr(stmt->do_while.condition, s);
+            break;
+        }
         case AST_BLOCK:
             return resolve_block(stmt, s);
         case AST_GOTO: {
@@ -244,11 +280,12 @@ static void collect_labels(struct ast_node *node)
             else
                 hm_set(&labels, tok->start, tok->length, node);
 
-            // if (node->next == NULL)
-            //     error(tok, "Label at the end of a block must be followed by a statement");
 
             // TODO: Which standard?
             // C23 allows this...
+            //
+            // if (node->next == NULL)
+            //     error(tok, "Label at the end of a block must be followed by a statement");
             if (node->next != NULL && node->next->type == AST_DECLARATION)
                 error(tok, "Label cannot be followed by a declaration");
             break;
@@ -268,12 +305,60 @@ static void collect_labels(struct ast_node *node)
     }
 }
 
+/* Loop labeling */
+
+static void label_loops(struct ast_node *node, struct loop_ctx *ctx)
+{
+    for (struct ast_node *s = node->block.first; s != NULL; s = s->next) {
+        switch(s->type) {
+            case AST_BREAK: {
+                if (!ctx)
+                    error(&s->token, "'break' statement outside of loop or switch");
+                else
+                    s->break_stmt.target_label = ctx->label;
+                break;
+            }
+            case AST_CONTINUE: {
+                if (!ctx)
+                    error(&s->token, "'continue' statement outside of loop or switch");
+                else
+                    s->continue_stmt.target_label = ctx->label;
+                break;
+            }
+            case AST_WHILE: {
+                char *lbl = make_unique("while", 5);
+                s->while_stmt.label = lbl;
+                struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+                label_loops(s->while_stmt.body, &new_ctx);
+                break;
+            }
+            case AST_DOWHILE: {
+                char *lbl = make_unique("dowhile", 7);
+                s->do_while.label = lbl;
+                struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+                label_loops(s->while_stmt.body, &new_ctx);
+                break;
+            }
+            case AST_FOR: {
+                char *lbl = make_unique("for", 3);
+                s->for_stmt.label = lbl;
+                struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+                label_loops(s->for_stmt.body, &new_ctx);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
 static struct ast_node *resolve_function(struct ast_node *fn)
 {
     hm_init(&labels);
 
     collect_labels(fn->function.body); // gotos, labels resolution
     resolve_block(fn->function.body, NULL); // variable resolution
+    label_loops(fn->function.body, NULL);
 
     hm_free(&labels);
     return fn;

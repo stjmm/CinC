@@ -27,6 +27,11 @@
     X(AST_BLOCK)        \
     X(AST_GOTO)         \
     X(AST_LABEL_STMT)   \
+    X(AST_BREAK)        \
+    X(AST_CONTINUE)     \
+    X(AST_WHILE)        \
+    X(AST_DOWHILE)      \
+    X(AST_FOR)          \
     /* Declarations */  \
     X(AST_DECLARATION)  \
     X(AST_FUNCTION)     \
@@ -70,8 +75,26 @@ struct ast_node {
         struct { struct token label; } goto_stmt;
         struct {
             struct token name;
-            struct ast_node *stmt;
         } label_stmt;
+        struct {
+            struct ast_node *condition;
+            struct ast_node *body;
+            const char *label;
+        } while_stmt;
+        struct {
+            struct ast_node *body;
+            struct ast_node *condition;
+            const char *label;
+        } do_while;
+        struct {
+            struct ast_node *for_init;
+            struct ast_node *condition;
+            struct ast_node *post;
+            struct ast_node *body;
+            const char *label;
+        } for_stmt;
+        struct { const char *target_label; } break_stmt;
+        struct { const char *target_label; } continue_stmt;
         struct { struct ast_node *first; } block;
 
         struct {
