@@ -19,8 +19,8 @@ struct scope {
 };
 
 struct loop_ctx {
-    const char *label;
-    struct loop_ctx *prev;
+    const char *break_label;
+    const char *continue_label;
 };
 
 static hash_map labels;
@@ -188,14 +188,21 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
         return NULL;
 
     switch (stmt->type) {
+        case AST_NULL_STMT:
+        case AST_BREAK:
+        case AST_CONTINUE:
+            break;
+        case AST_GOTO: {
+            struct token *tok = &stmt->goto_stmt.label;
+            if (!hm_get(&labels, tok->start, tok->length))
+                error(tok, "Use of undeclared label");
+            break;
+        }
         case AST_RETURN:
             stmt->return_stmt.expr = resolve_expr(stmt->return_stmt.expr, s);
             break;
         case AST_EXPR_STMT:
             stmt->expr_stmt.expr = resolve_expr(stmt->expr_stmt.expr, s);
-            break;
-        case AST_NULL_STMT:
-            return stmt;
             break;
         case AST_IF_STMT:
             stmt->if_stmt.condition = resolve_expr(stmt->if_stmt.condition, s);
@@ -214,13 +221,9 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             }
 
             struct ast_node *condition = stmt->for_stmt.condition;
-            if (condition)
-                condition = resolve_expr(condition, new_scope);
-
+            condition = resolve_expr(condition, new_scope);
             struct ast_node *post = stmt->for_stmt.post;
-            if (post)
-                post = resolve_expr(post, new_scope);
-
+            post = resolve_expr(post, new_scope);
             stmt->for_stmt.body = resolve_statement(stmt->for_stmt.body, new_scope);
             scope_pop(new_scope);
             break;
@@ -235,16 +238,23 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             stmt->do_while.condition = resolve_expr(stmt->do_while.condition, s);
             break;
         }
+        case AST_SWITCH:
+            stmt->switch_stmt.condition = resolve_expr(stmt->switch_stmt.condition, s);
+            for (struct ast_node *c = stmt->switch_stmt.cases; c; c = c->next)
+                resolve_statement(c, s);
+            break;
+        case AST_CASE:
+            for (struct ast_node *item = stmt->case_stmt.first; item; item = item->next)
+                resolve_statement(item, s);
+            break;
+        case AST_DEFAULT:
+            for (struct ast_node *item = stmt->default_stmt.first; item; item = item->next)
+                resolve_statement(item, s);
+            break;
         case AST_BLOCK:
             return resolve_block(stmt, s);
-        case AST_GOTO: {
-            struct token *tok = &stmt->goto_stmt.label;
-            if (!hm_get(&labels, tok->start, tok->length))
-                error(tok, "Use of undeclared label");
-            break;
-        }
         default:
-            ;
+            break;
     }
 
     return stmt;
@@ -265,7 +275,7 @@ static struct ast_node *resolve_block(struct ast_node *block, struct scope *pare
     return block;
 }
 
-/* goto and labels resolution */
+/* Goto and labels resolution */
 
 static void collect_labels(struct ast_node *node)
 {
@@ -280,12 +290,6 @@ static void collect_labels(struct ast_node *node)
             else
                 hm_set(&labels, tok->start, tok->length, node);
 
-
-            // TODO: Which standard?
-            // C23 allows this...
-            //
-            // if (node->next == NULL)
-            //     error(tok, "Label at the end of a block must be followed by a statement");
             if (node->next != NULL && node->next->type == AST_DECLARATION)
                 error(tok, "Label cannot be followed by a declaration");
             break;
@@ -309,13 +313,25 @@ static void collect_labels(struct ast_node *node)
         case AST_DOWHILE:
             collect_labels(node->do_while.body);
             break;
+        case AST_SWITCH:
+            for (struct ast_node *c = node->switch_stmt.cases; c; c = c->next)
+                collect_labels(c);
+            break;
+        case AST_CASE:
+            for (struct ast_node *item = node->case_stmt.first; item; item = item->next)
+                collect_labels(item);
+            break;
+        case AST_DEFAULT:
+            for (struct ast_node *item = node->default_stmt.first; item; item = item->next)
+                collect_labels(item);
+            break;
         default:
             break;
     }
 }
 
-/* Loop labeling */
-
+/* Label loops and their break and continues
+ * Error if break or continue outside of a loop */
 static void label_loops(struct ast_node *node, struct loop_ctx *ctx);
 
 static void label_loops_block(struct ast_node *node, struct loop_ctx *ctx)
@@ -332,49 +348,208 @@ static void label_loops(struct ast_node *stmt, struct loop_ctx *ctx)
 
     switch(stmt->type) {
         case AST_BREAK: {
-            if (!ctx)
+            if (!ctx || !ctx->break_label)
                 error(&stmt->token, "'break' statement outside of loop or switch");
             else
-                stmt->break_stmt.target_label = ctx->label;
+                stmt->break_stmt.target_label = ctx->break_label;
             break;
         }
         case AST_CONTINUE: {
-            if (!ctx)
-                error(&stmt->token, "'continue' statement outside of loop or switch");
+            if (!ctx || !ctx->continue_label)
+                error(&stmt->token, "'continue' statement outside of loop");
             else
-                stmt->continue_stmt.target_label = ctx->label;
+                stmt->continue_stmt.target_label = ctx->continue_label;
             break;
         }
         case AST_WHILE: {
             char *lbl = make_unique("while", 5);
             stmt->while_stmt.label = lbl;
-            struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+            struct loop_ctx new_ctx = { .break_label = lbl, .continue_label = lbl };
             label_loops(stmt->while_stmt.body, &new_ctx);
             break;
         }
         case AST_DOWHILE: {
             char *lbl = make_unique("dowhile", 7);
             stmt->do_while.label = lbl;
-            struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+            struct loop_ctx new_ctx = { .break_label = lbl, .continue_label = lbl };
             label_loops(stmt->do_while.body, &new_ctx);
             break;
         }
         case AST_FOR: {
             char *lbl = make_unique("for", 3);
             stmt->for_stmt.label = lbl;
-            struct loop_ctx new_ctx = { .label = lbl, .prev = ctx };
+            struct loop_ctx new_ctx = { .break_label = lbl, .continue_label = lbl };
             label_loops(stmt->for_stmt.body, &new_ctx);
             break;
         }
+
         case AST_IF_STMT: {
             label_loops(stmt->if_stmt.then, ctx);
             label_loops(stmt->if_stmt.else_then, ctx);
+            break;
+        }
+        case AST_SWITCH: {
+            char *lbl = make_unique("switch", 6);
+            stmt->switch_stmt.label = lbl;
+            // Break targets the switch, continue targets enclosing loop
+            struct loop_ctx new_ctx = { 
+                .break_label = lbl,
+                .continue_label = ctx ? ctx->continue_label : NULL,
+            };
+            for (struct ast_node *c = stmt->switch_stmt.cases; c; c = c->next)
+                label_loops(c, &new_ctx);
+            break;
+        }
+        case AST_CASE: {
+            for (struct ast_node *item = stmt->case_stmt.first; item; item = item->next)
+                label_loops(item, ctx);
+            break;
+        }
+        case AST_DEFAULT: {
+            for (struct ast_node *item = stmt->default_stmt.first; item; item = item->next)
+                label_loops(item, ctx);
             break;
         }
         case AST_BLOCK: {
             label_loops_block(stmt, ctx);
             break;
         }
+        default:
+            break;
+    }
+}
+
+/* Case Collection */
+struct case_entry {
+    struct ast_node *node; // AST_CASE node
+    struct case_entry *next;
+};
+
+struct switch_annotation {
+    struct case_entry *cases;
+    struct ast_node *default_node;
+};
+
+static void collect_cases(struct ast_node *node, struct switch_annotation *ann)
+{
+    if (!node)
+        return;
+
+    switch(node->type) {
+        case AST_CASE: {
+            if (node->case_stmt.value->type != AST_CONSTANT) {
+                error(&node->token, "'case' value must be a constant integer");
+                return;
+            }
+
+            // Check for duplicate values in this switch
+            long val = node->case_stmt.value->constant.value;
+            for (struct case_entry *e = ann->cases; e; e = e->next) {
+                if (e->node->case_stmt.value->constant.value == val) {
+                    error(&e->node->token, "Duplicate case value in switch");
+                    return;
+                }
+            }
+
+            node->case_stmt.label = make_unique("case", 4);
+            struct case_entry *entry = malloc(sizeof(struct case_entry));
+            *entry = (struct case_entry){ .node = node, .next = NULL };
+
+            // Append to preserve order in switch
+            struct case_entry **tail = &ann->cases;
+            while (*tail)
+                tail = &(*tail)->next;
+            *tail = entry;
+
+            // Descend into case statements (may contains blocks etc)
+            for (struct ast_node *item = node->case_stmt.first; item; item = item->next)
+                collect_cases(item, ann);
+            break;
+        }
+        case AST_DEFAULT: {
+            if (ann->default_node) {
+                error(&node->token, "Multiple 'default' labels in one switch");
+                return;
+            }
+
+            node->default_stmt.label = make_unique("default", 7);
+            ann->default_node = node;
+
+            // Descend into default statements
+            for (struct ast_node *item = node->default_stmt.first; item; item = item->next)
+                collect_cases(item, ann);
+            break;
+        }
+        // Nested switch owns its own cases
+        case AST_SWITCH:
+            break;
+        case AST_BLOCK:
+            for (struct ast_node *item = node->block.first; item; item = item->next)
+                collect_cases(item, ann);
+            break;
+        case AST_IF_STMT:
+            collect_cases(node->if_stmt.then, ann);
+            collect_cases(node->if_stmt.else_then, ann);
+            break;
+        case AST_WHILE:
+            collect_cases(node->while_stmt.body, ann);
+            break;
+        case AST_FOR:
+            collect_cases(node->for_stmt.body, ann);
+            break;
+        case AST_DOWHILE:
+            collect_cases(node->do_while.body, ann);
+            break;
+        default:
+            break;
+    }
+}
+
+static void annotate_switches(struct ast_node *node)
+{
+    if (!node)
+        return;
+
+
+    switch (node->type) {
+        case AST_SWITCH: {
+            struct switch_annotation *ann = calloc(1, sizeof(struct switch_annotation));
+
+            for (struct ast_node *c = node->switch_stmt.cases; c; c = c->next)
+                collect_cases(c, ann);
+
+            node->switch_stmt.annotation = ann;
+
+            // Nested switches
+            for (struct ast_node *c = node->switch_stmt.cases; c; c = c->next)
+                annotate_switches(c);
+            break;
+        }
+        case AST_CASE:
+            for (struct ast_node *item = node->case_stmt.first; item; item = item->next)
+                annotate_switches(item);
+            break;
+        case AST_DEFAULT:
+            for (struct ast_node *item = node->default_stmt.first; item; item = item->next)
+                annotate_switches(item);
+            break;
+        case AST_BLOCK:
+            for (struct ast_node *item = node->block.first; item; item = item->next)
+                annotate_switches(item);
+            break;
+        case AST_IF_STMT:
+            annotate_switches(node->if_stmt.then);
+            annotate_switches(node->if_stmt.else_then);
+            break;
+        case AST_WHILE:
+            annotate_switches(node->while_stmt.body);
+            break;
+        case AST_FOR:
+            annotate_switches(node->for_stmt.body);
+            break;
+        case AST_DOWHILE:
+            annotate_switches(node->do_while.body);
+            break;
         default:
             break;
     }
@@ -387,6 +562,7 @@ static struct ast_node *resolve_function(struct ast_node *fn)
     collect_labels(fn->function.body); // gotos, labels resolution
     resolve_block(fn->function.body, NULL); // variable resolution
     label_loops(fn->function.body, NULL);
+    annotate_switches(fn->function.body);
 
     hm_free(&labels);
     return fn;

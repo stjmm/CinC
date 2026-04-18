@@ -32,6 +32,9 @@
     X(AST_WHILE)        \
     X(AST_DOWHILE)      \
     X(AST_FOR)          \
+    X(AST_SWITCH)       \
+    X(AST_CASE)         \
+    X(AST_DEFAULT)      \
     /* Declarations */  \
     X(AST_DECLARATION)  \
     X(AST_FUNCTION)     \
@@ -93,6 +96,21 @@ struct ast_node {
             struct ast_node *body;
             const char *label;
         } for_stmt;
+        struct {
+            struct ast_node *value;
+            struct ast_node *first;
+            const char *label;
+        } case_stmt;
+        struct {
+            struct ast_node *first;
+            const char *label;
+        } default_stmt;
+        struct {
+            struct ast_node *condition;
+            struct ast_node *cases; // List of AST_CASE / AST_DEFAULT
+            const char *label;
+            struct switch_annotation *annotation;
+        } switch_stmt;
         struct { const char *target_label; } break_stmt;
         struct { const char *target_label; } continue_stmt;
         struct { struct ast_node *first; } block;

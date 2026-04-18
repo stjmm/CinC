@@ -147,8 +147,20 @@ static enum token_type identifier_type(void)
 {
     switch (lexer_state.start[0]) {
         case 'b': return check_keyword(1, 4, "reak", TOKEN_BREAK);
-        case 'c': return check_keyword(1, 7, "ontinue", TOKEN_CONTINUE);
-        case 'd': return check_keyword(1, 1, "o", TOKEN_DO);
+        case 'c': 
+            if (lexer_state.current - lexer_state.start > 1)
+                switch (lexer_state.start[1]) {
+                    case 'a': return check_keyword(2, 2, "se", TOKEN_CASE);
+                    case 'o': return check_keyword(2, 6, "ntinue", TOKEN_CONTINUE);
+                }
+            break;
+        case 'd':
+            if (lexer_state.current - lexer_state.start > 1)
+                switch(lexer_state.start[1]) {
+                    case 'e': return check_keyword(2, 5, "fault", TOKEN_DEFAULT);
+                    case 'o': return TOKEN_DO;
+                }
+            break;
         case 'e': return check_keyword(1, 3, "lse", TOKEN_ELSE);
         case 'f': return check_keyword(1, 2, "or", TOKEN_FOR);
         case 'g': return check_keyword(1, 3, "oto", TOKEN_GOTO);
@@ -159,6 +171,7 @@ static enum token_type identifier_type(void)
                     case 'n': return check_keyword(2, 1, "t", TOKEN_INT);
                 }
             break;
+        case 's': return check_keyword(1, 5, "witch", TOKEN_SWITCH);
         case 'r': return check_keyword(1, 5, "eturn", TOKEN_RETURN);
         case 'w': return check_keyword(1, 4, "hile", TOKEN_WHILE);
         case 'v': return check_keyword(1, 3, "oid", TOKEN_VOID);

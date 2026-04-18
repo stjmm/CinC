@@ -65,6 +65,7 @@
     X(TOKEN_BREAK)                \
     X(TOKEN_CONTINUE)             \
     X(TOKEN_SWITCH)               \
+    X(TOKEN_CASE)                 \
     X(TOKEN_DEFAULT)              \
     /* Misc */                    \
     X(TOKEN_ERROR)                \

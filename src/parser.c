@@ -90,6 +90,13 @@ static void synchronize_block_item(void)
             case TOKEN_RETURN:
             case TOKEN_IF:
             case TOKEN_ELSE:
+            case TOKEN_FOR:
+            case TOKEN_WHILE:
+            case TOKEN_DO:
+            case TOKEN_CONTINUE:
+            case TOKEN_BREAK:
+            case TOKEN_SWITCH:
+            case TOKEN_GOTO:
                 return;
             default:
                 break;
@@ -315,21 +322,6 @@ static struct ast_node *parse_expression(enum precedence prec)
 static struct ast_node *parse_block(void);
 static struct ast_node *parse_declaration(void);
 
-// Not used for now
-static struct ast_node *parse_expr_stmt(void)
-{
-    if (match(TOKEN_SEMICOLON))
-        return AST_NEW(AST_NULL_STMT, parser_state.previous);
-
-    struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
-    if (!expr)
-        return NULL;
-
-    consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
-
-    return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
-}
-
 static struct ast_node *parse_statement(void)
 {
     if (match(TOKEN_LEFT_BRACE)) {
@@ -375,7 +367,96 @@ static struct ast_node *parse_statement(void)
     }
 
     if (match(TOKEN_SWITCH)) {
+        struct token switch_tok = parser_state.previous;
 
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'switch'");
+        struct ast_node *cond = parse_expression(PREC_ASSIGNMENT);
+        if (!cond) return NULL;
+        consume(TOKEN_RIGHT_PAREN, "Expected '(' after 'switch'");
+        consume(TOKEN_LEFT_BRACE, "Expected '{' after 'switch'");
+
+        struct ast_node *cases_head = NULL;
+        struct ast_node *cases_tail = NULL;
+
+        while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+            if (match(TOKEN_CASE)) {
+                struct token case_tok = parser_state.previous;
+
+                struct ast_node *value = parse_expression(PREC_ASSIGNMENT);
+                if (!value)
+                    return NULL;
+                consume(TOKEN_COLON, "Expected ':' after case value");
+
+                struct ast_node *body_head = NULL;
+                struct ast_node *body_tail = NULL;
+                while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
+                        !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+                    struct ast_node *stmt = parse_statement();
+                    if (!stmt)
+                        return NULL;
+
+                    if (!body_head)
+                        body_head = stmt;
+                    else
+                        body_tail->next = stmt;
+                    body_tail = stmt;
+                }
+
+                struct ast_node *node = AST_NEW(AST_CASE, case_tok,
+                        .case_stmt.value = value,
+                        .case_stmt.first = body_head,
+                        .case_stmt.label = NULL
+                );
+
+                if (!cases_head)
+                    cases_head = node;
+                else
+                    cases_tail->next = node;
+                cases_tail = node;
+
+            } else if (match(TOKEN_DEFAULT)) {
+                struct token default_tok = parser_state.previous;
+                consume(TOKEN_COLON, "Expected ':' after 'default'");
+
+                struct ast_node *body_head = NULL;
+                struct ast_node *body_tail = NULL;
+                while(!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
+                        !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+                    struct ast_node *stmt = parse_statement();
+                    if (!stmt)
+                        return NULL;
+
+                    if (!body_head)
+                        body_head = stmt;
+                    else
+                        body_tail->next = stmt;
+                    body_tail = stmt;
+                }
+
+                struct ast_node *node = AST_NEW(AST_DEFAULT, default_tok,
+                        .default_stmt.first = body_head,
+                        .default_stmt.label = NULL
+                );
+
+                if (!cases_head)
+                    cases_head = node;
+                else
+                    cases_tail->next = node;
+                cases_tail = node;
+
+            } else {
+                error(&parser_state.previous, "Expected 'case' or 'default' after switch");
+                return NULL;
+            }
+        }
+
+        consume(TOKEN_RIGHT_BRACE, "Expected '}' after switch body");
+
+        return AST_NEW(AST_SWITCH, switch_tok,
+                .switch_stmt.condition = cond,
+                .switch_stmt.cases = cases_head,
+                .switch_stmt.label = NULL
+        );
     }
 
     if (match(TOKEN_FOR)) {
