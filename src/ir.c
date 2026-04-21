@@ -400,6 +400,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             struct token *tok = &node->label_stmt.name;
             int label_id = get_or_create_label_id(tok->start, tok->length); // After sema we can safely do this, no double labels exist in a function
             emit_label(fn, label_id);
+            emit_block_item(node->label_stmt.stmt, fn);
             break;
         }
         case AST_FOR: {
@@ -505,6 +506,8 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             
             // First emit comparison chain: cmp cond == case_val, jump to case label
             for (struct case_entry *e = ann->cases; e; e = e->next) {
+                if (e->node->type == AST_DEFAULT)
+                    continue; // Skip default: it has no condition
                 struct ast_node *n = e->node;
                 long val = n->case_stmt.value->constant.value;
                 int case_label = get_or_create_label_id(n->case_stmt.label,
@@ -527,9 +530,6 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             for (struct case_entry *e = ann->cases; e; e = e->next)
                 emit_block_item(e->node, fn);
 
-            if (ann->default_node)
-                emit_block_item(ann->default_node, fn);
-
             emit_label(fn, break_label);
             break;
         }
@@ -540,7 +540,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             for (struct ast_node *item = node->case_stmt.first; item; item = item->next)
                 emit_block_item(item, fn);
             break;
-       }
+        }
         case AST_DEFAULT: {
             int label_id = get_or_create_label_id(node->default_stmt.label,
                     strlen(node->default_stmt.label));
@@ -548,7 +548,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             for (struct ast_node *item = node->default_stmt.first; item; item = item->next)
                 emit_block_item(item, fn);
             break;
-      }
+        }
         default:
             fprintf(stderr, "unhandled stmt kind\n");
             exit(1);

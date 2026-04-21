@@ -9,6 +9,7 @@
  *  - loop/switch labels are set after label_loops()
  *  - switch_stmt.annotation is set by annotate_switches()
  */
+
 #ifndef CINC_AST_H
 #define CINC_AST_H
 
@@ -100,6 +101,7 @@ struct ast_node {
         struct { struct token label; } goto_stmt;
         struct {
             struct token name;
+            struct ast_node *stmt; // "Owns" statement under label - must be handled in sema, ir passes
         } label_stmt;
         struct {
             struct ast_node *condition;

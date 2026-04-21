@@ -248,9 +248,8 @@ static struct ast_node *ternary(struct ast_node *left)
     );
 }
 
-/* Each token maps to a prefix rule (how to parse) at the start of an expression,
- * an infix rule (how to parse in the middle of an expression) and minimum
- * precedence level for infix use. */
+/* Each token maps to a prefix rule at the start of an expression,
+ * an infix rule and minimum precedence level for infix use. */
 static struct parse_rule parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
@@ -574,7 +573,11 @@ static struct ast_node *parse_statement(void)
     // AST_IDENTIFIER with ':' it's a goto label
     if (expr->type == AST_IDENTIFIER) {
         if (match(TOKEN_COLON)) {
-            return AST_NEW(AST_LABEL_STMT, expr->token, .label_stmt.name = expr->token);
+            struct ast_node *stmt = parse_statement();
+            return AST_NEW(AST_LABEL_STMT, expr->token,
+                    .label_stmt.stmt = stmt,
+                    .label_stmt.name = expr->token
+            );
         }
     }
 

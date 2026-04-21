@@ -256,6 +256,9 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             break;
         case AST_BLOCK:
             return resolve_block(stmt, s);
+        case AST_LABEL_STMT:
+            resolve_statement(stmt->label_stmt.stmt, s);
+            break;
         default:
             break;
     }
@@ -294,6 +297,8 @@ static void resolve_labels(struct ast_node *node)
 
             if (node->next != NULL && node->next->type == AST_DECLARATION)
                 error(tok, "Label cannot be followed by a declaration");
+
+            resolve_labels(node->label_stmt.stmt);
             break;
         }
         case AST_IF_STMT: {
@@ -408,6 +413,9 @@ static void resolve_break_continue(struct ast_node *stmt, struct loop_ctx *ctx)
                 resolve_break_continue(item, ctx);
             break;
         }
+        case AST_LABEL_STMT:
+            resolve_break_continue(stmt->label_stmt.stmt, ctx);
+            break;
         default:
             break;
     }
@@ -457,6 +465,13 @@ static void resolve_cases(struct ast_node *node, struct switch_annotation *ann)
 
             node->default_stmt.label = make_unique("default", 7);
             ann->default_node = node;
+
+            struct case_entry *entry = malloc(sizeof(struct case_entry));
+            *entry = (struct case_entry) { .node = node, .next = NULL };
+            struct case_entry **tail = &ann->cases;
+            while (*tail)
+                tail = &(*tail)->next;
+            *tail = entry;
 
             // Descend into default statements
             for (struct ast_node *item = node->default_stmt.first; item; item = item->next)
@@ -531,6 +546,9 @@ static void resolve_switches(struct ast_node *node)
             break;
         case AST_DOWHILE:
             resolve_switches(node->do_while.body);
+            break;
+        case AST_LABEL_STMT:
+            resolve_switches(node->label_stmt.stmt);
             break;
         default:
             break;

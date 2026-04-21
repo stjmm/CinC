@@ -165,7 +165,7 @@ static enum token_type identifier_type(void)
             if (lexer_state.current - lexer_state.start > 1)
                 switch(lexer_state.start[1]) {
                     case 'e': return check_keyword(2, 5, "fault", TOKEN_DEFAULT);
-                    case 'o': return TOKEN_DO;
+                    case 'o': return check_keyword(2, 0, "", TOKEN_DO);
                 }
             break;
         case 'e': return check_keyword(1, 3, "lse", TOKEN_ELSE);
@@ -174,7 +174,7 @@ static enum token_type identifier_type(void)
         case 'i': 
             if (lexer_state.current - lexer_state.start > 1)
                 switch (lexer_state.start[1]) {
-                    case 'f': return TOKEN_IF;
+                    case 'f': return check_keyword(2, 0, "", TOKEN_IF);
                     case 'n': return check_keyword(2, 1, "t", TOKEN_INT);
                 }
             break;
