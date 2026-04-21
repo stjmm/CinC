@@ -243,8 +243,7 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
         }
         case AST_SWITCH:
             stmt->switch_stmt.condition = resolve_expr(stmt->switch_stmt.condition, s);
-            for (struct ast_node *c = stmt->switch_stmt.cases; c; c = c->next)
-                resolve_statement(c, s);
+            resolve_statement(stmt->switch_stmt.body, s);
             break;
         case AST_CASE:
             for (struct ast_node *item = stmt->case_stmt.first; item; item = item->next)
@@ -321,8 +320,7 @@ static void resolve_labels(struct ast_node *node)
             resolve_labels(node->do_while.body);
             break;
         case AST_SWITCH:
-            for (struct ast_node *c = node->switch_stmt.cases; c; c = c->next)
-                resolve_labels(c);
+            resolve_labels(node->switch_stmt.body);
             break;
         case AST_CASE:
             for (struct ast_node *item = node->case_stmt.first; item; item = item->next)
@@ -394,8 +392,7 @@ static void resolve_break_continue(struct ast_node *stmt, struct loop_ctx *ctx)
                 .break_label = lbl,
                 .continue_label = ctx ? ctx->continue_label : NULL,
             };
-            for (struct ast_node *c = stmt->switch_stmt.cases; c; c = c->next)
-                resolve_break_continue(c, &new_ctx);
+            resolve_break_continue(stmt->switch_stmt.body, &new_ctx);
             break;
         }
         case AST_CASE: {
@@ -512,14 +509,11 @@ static void resolve_switches(struct ast_node *node)
         case AST_SWITCH: {
             struct switch_annotation *ann = calloc(1, sizeof(struct switch_annotation));
 
-            for (struct ast_node *c = node->switch_stmt.cases; c; c = c->next)
-                resolve_cases(c, ann);
-
+            resolve_cases(node->switch_stmt.body, ann);
             node->switch_stmt.annotation = ann;
 
             // Nested switches
-            for (struct ast_node *c = node->switch_stmt.cases; c; c = c->next)
-                resolve_switches(c);
+            resolve_switches(node->switch_stmt.body);
             break;
         }
         case AST_CASE:

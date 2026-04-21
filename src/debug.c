@@ -236,8 +236,7 @@ void ast_print(struct ast_node *node, int depth)
             INDENT(); printf("  (cond ");
             print_expr(node->switch_stmt.condition);
             printf("\n");
-            for (struct ast_node *n = node->switch_stmt.cases; n; n = n->next)
-                ast_print(n, depth + 1);
+            ast_print(node->switch_stmt.body, depth + 1);
             INDENT(); printf(")\n");
             break;
 

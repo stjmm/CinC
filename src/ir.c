@@ -360,12 +360,12 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
                 emit_block_item(node->if_stmt.then, fn);
 
                 emit_label(fn, end_label);
-            // With else:
-            //  cond= = emit(cond); if == 0 jump else
-            //  emit(then); jump end
-            //  else: emit(else)
-            //  end:
             } else {
+                // With else:
+                //  cond= = emit(cond); if == 0 jump else
+                //  emit(then); jump end
+                //  else: emit(else)
+                //  end:
                 int end_label = make_label();
                 int else_label = make_label();
 
@@ -511,7 +511,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
                 struct ast_node *n = e->node;
                 long val = n->case_stmt.value->constant.value;
                 int case_label = get_or_create_label_id(n->case_stmt.label,
-                        strlen(n->case_stmt.label)) ;
+                                            strlen(n->case_stmt.label));
                 struct ir_val case_val = make_constant(val);
                 struct ir_val cmp_tmp = make_temp();
                 emit_binary(fn, IR_EQUAL, cond, case_val, cmp_tmp);
@@ -520,15 +520,16 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
 
             // If no case matched, jump to default or fall through break
             if (ann->default_node) {
-                int default_label = get_or_create_label_id(ann->default_node->default_stmt.label, strlen(ann->default_node->default_stmt.label));
+                int default_label = get_or_create_label_id(
+                        ann->default_node->default_stmt.label,
+                        strlen(ann->default_node->default_stmt.label));
                 emit_jump(fn, default_label);
             } else {
                 emit_jump(fn, break_label);
             }
 
             // Emit case bodies - labels are placed by AST_CASE / AST_DEFAULT handlers
-            for (struct case_entry *e = ann->cases; e; e = e->next)
-                emit_block_item(e->node, fn);
+            emit_block_item(node->switch_stmt.body, fn);
 
             emit_label(fn, break_label);
             break;

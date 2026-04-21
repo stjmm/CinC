@@ -131,7 +131,7 @@ struct ast_node {
         } default_stmt;
         struct {
             struct ast_node *condition;
-            struct ast_node *cases; // Linked-list of AST_CASE / AST_DEFAULT
+            struct ast_node *body;
             const char *label;
             struct switch_annotation *annotation; // Filled by sema, used by IR
         } switch_stmt;
