@@ -220,15 +220,13 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             struct ast_node *for_init = stmt->for_stmt.for_init;
             if (for_init) {
                 if (for_init->type == AST_DECLARATION)
-                    for_init = resolve_declaration(for_init, new_scope);
+                    resolve_declaration(for_init, new_scope);
                 else
-                    for_init = resolve_expr(for_init, new_scope);
+                    resolve_expr(for_init, new_scope);
             }
 
-            struct ast_node *condition = stmt->for_stmt.condition;
-            condition = resolve_expr(condition, new_scope);
-            struct ast_node *post = stmt->for_stmt.post;
-            post = resolve_expr(post, new_scope);
+            stmt->for_stmt.condition = resolve_expr(stmt->for_stmt.condition, new_scope);
+            stmt->for_stmt.post = resolve_expr(stmt->for_stmt.post, new_scope);
             stmt->for_stmt.body = resolve_statement(stmt->for_stmt.body, new_scope);
             scope_pop(new_scope);
             break;

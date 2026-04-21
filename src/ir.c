@@ -9,13 +9,13 @@
 #include "sema.h"
 #include "base/hash_map.h"
 
-struct loop_labels {
+struct loop_switch_labels {
     int break_label;
     int continue_label;
 };
 
 static hash_map goto_labels; // goto label name -> int label_id
-static hash_map loop_labels_map; // sema loop label (e.g. "for.3") -> struct loop_labels{ break_id, continue_id }
+static hash_map loop_switch_labels_map; // sema loop / struct label (e.g. "for.3") -> struct loop_labels{ break_id, continue_id }
 
 static struct ir_val make_constant(long c) 
 {
@@ -55,11 +55,11 @@ static int get_or_create_label_id(const char *name, int len)
     return id;
 }
 
-static void register_loop(const char *label, int break_id, int continue_id)
+static void register_loop_switch(const char *label, int break_id, int continue_id)
 {
-    struct loop_labels *lbl = malloc(sizeof(*lbl));
-    *lbl = (struct loop_labels){ .break_label = break_id, .continue_label = continue_id};
-    hashmap_set(&loop_labels_map, label, strlen(label), (void *)lbl);
+    struct loop_switch_labels *lbl = malloc(sizeof(*lbl));
+    *lbl = (struct loop_switch_labels){ .break_label = break_id, .continue_label = continue_id};
+    hashmap_set(&loop_switch_labels_map, label, strlen(label), (void *)lbl);
 }
 
 static enum ir_unary_op convert_unop(struct token tok)
@@ -334,13 +334,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
 {
     switch (node->type) {
         case AST_RETURN: {
-            struct ir_val src = emit_expr(node->return_stmt.expr, fn);
-            struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
-            *instr = (struct ir_instr){
-                .type = IR_RETURN,
-                .ret.src = src
-            };
-            append_instr(fn, instr);
+            emit_return(fn, emit_expr(node->return_stmt.expr, fn));
             break;
         }
         case AST_DECLARATION: {
@@ -420,7 +414,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             int break_label = make_label();
             int continue_label = make_label();
 
-            register_loop(node->for_stmt.label, break_label, continue_label);
+            register_loop_switch(node->for_stmt.label, break_label, continue_label);
 
             if (node->for_stmt.for_init) {
                 if (node->for_stmt.for_init->type == AST_DECLARATION)
@@ -454,7 +448,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             int break_label = make_label();
             int continue_label = make_label();
 
-            register_loop(node->do_while.label, break_label, continue_label);
+            register_loop_switch(node->while_stmt.label, break_label, continue_label);
 
             emit_label(fn, continue_label);
             struct ir_val cond = emit_expr(node->while_stmt.condition, fn);
@@ -474,7 +468,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             int break_label = make_label();
             int continue_label = make_label();
 
-            register_loop(node->do_while.label, break_label, continue_label);
+            register_loop_switch(node->do_while.label, break_label, continue_label);
 
             emit_label(fn, start_label);
             emit_block_item(node->do_while.body, fn);
@@ -487,7 +481,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
         case AST_BREAK: {
             // Lookup enclosing loop/switch label in loop_labels_map
             // Emit break to break_label id
-            struct loop_labels *lbls = hashmap_get(&loop_labels_map,
+            struct loop_switch_labels *lbls = hashmap_get(&loop_switch_labels_map,
                                                 node->break_stmt.target_label,
                                                 strlen(node->break_stmt.target_label));
             emit_jump(fn, lbls->break_label);
@@ -495,7 +489,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
         }
         case AST_CONTINUE: {
             // Lookup enclosing loop in loob_labels_map
-            struct loop_labels *lbls = hashmap_get(&loop_labels_map,
+            struct loop_switch_labels *lbls = hashmap_get(&loop_switch_labels_map,
                                                 node->continue_stmt.target_label,
                                                 strlen(node->continue_stmt.target_label));
             emit_jump(fn, lbls->continue_label);
@@ -503,18 +497,58 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
         }
         case AST_SWITCH: {
             int break_label = make_label();
+            // Sema handled continue in switches, we can register like this
+            register_loop_switch(node->switch_stmt.label, break_label, -1);
+
+            struct ir_val cond = emit_expr(node->switch_stmt.condition, fn);
+            struct switch_annotation *ann = node->switch_stmt.annotation;
+            
+            // First emit comparison chain: cmp cond == case_val, jump to case label
+            for (struct case_entry *e = ann->cases; e; e = e->next) {
+                struct ast_node *n = e->node;
+                long val = n->case_stmt.value->constant.value;
+                int case_label = get_or_create_label_id(n->case_stmt.label,
+                        strlen(n->case_stmt.label)) ;
+                struct ir_val case_val = make_constant(val);
+                struct ir_val cmp_tmp = make_temp();
+                emit_binary(fn, IR_EQUAL, cond, case_val, cmp_tmp);
+                emit_jump_cond(fn, cmp_tmp, case_label, IR_JUMP_IF_NOT_ZERO);
+            }
+
+            // If no case matched, jump to default or fall through break
+            if (ann->default_node) {
+                int default_label = get_or_create_label_id(ann->default_node->default_stmt.label, strlen(ann->default_node->default_stmt.label));
+                emit_jump(fn, default_label);
+            } else {
+                emit_jump(fn, break_label);
+            }
+
+            // Emit case bodies - labels are placed by AST_CASE / AST_DEFAULT handlers
+            for (struct case_entry *e = ann->cases; e; e = e->next)
+                emit_block_item(e->node, fn);
+
+            if (ann->default_node)
+                emit_block_item(ann->default_node, fn);
 
             emit_label(fn, break_label);
             break;
         }
-        case AST_CASE:
+        case AST_CASE: {
+            int label_id = get_or_create_label_id(node->case_stmt.label,
+                    strlen(node->case_stmt.label));
+            emit_label(fn, label_id);
             for (struct ast_node *item = node->case_stmt.first; item; item = item->next)
                 emit_block_item(item, fn);
             break;
-        case AST_DEFAULT:
+       }
+        case AST_DEFAULT: {
+            int label_id = get_or_create_label_id(node->default_stmt.label,
+                    strlen(node->default_stmt.label));
+            emit_label(fn, label_id);
             for (struct ast_node *item = node->default_stmt.first; item; item = item->next)
                 emit_block_item(item, fn);
             break;
+      }
         default:
             fprintf(stderr, "unhandled stmt kind\n");
             exit(1);
@@ -528,7 +562,7 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     fn->name_length = fn_node->token.length;
 
     hashmap_init(&goto_labels);
-    hashmap_init(&loop_labels_map);
+    hashmap_init(&loop_switch_labels_map);
 
     for (struct ast_node *item = fn_node->function.body->block.first; item != NULL; item = item->next)
         emit_block_item(item, fn);
@@ -539,7 +573,7 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     emit_return(fn, make_constant(0));
 
     hashmap_free(&goto_labels);
-    hashmap_free(&loop_labels_map);
+    hashmap_free(&loop_switch_labels_map);
     return fn;
 }
 
