@@ -1,14 +1,13 @@
+/*
+ * Three-Address IR ("TACKY").
+ */
+
 #ifndef CINC_IR_H
 #define CINC_IR_H
 
 #include "ast.h"
 
-/*
- * Based on Three-Address Representation "TACKY"
- * from "Writing a C Compiler" by Nora Sandler
- */
-
-/* IR Value */
+/* Values */
 
 enum ir_val_type { IR_VAL_VAR, IR_VAL_CONSTANT };
 
@@ -23,7 +22,7 @@ struct ir_val {
     };
 };
 
-/* IR Instructions */
+/* Instructions */
 
 enum ir_unary_op { IR_NEGATE, IR_COMPLEMENT, IR_NOT };
 enum ir_binary_op {
@@ -88,13 +87,13 @@ struct ir_instr {
     };
 };
 
-/* IR Function/Program */
+/* Function / Program */
 
 struct ir_function {
     const char *name;
     int name_length;
-    struct ir_instr *first;
-    struct ir_instr *last;
+    struct ir_instr *first; // Instruction list head
+    struct ir_instr *last;  // Kept for O(1) append
 };
 
 struct ir_program {

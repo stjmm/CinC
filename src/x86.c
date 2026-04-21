@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <string.h>
 #include <stdarg.h>
 
 #include "x86.h"
@@ -319,7 +318,7 @@ struct pseudo_map {
 
 static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name, int length)
 {
-    struct pseudo_entry *e = hm_get(&pm->entries, name, length);
+    struct pseudo_entry *e = hashmap_get(&pm->entries, name, length);
     if (e)
         return e->stack_offset;
 
@@ -330,7 +329,7 @@ static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name, int
         .length       = length,
         .stack_offset = pm->current_offset,
     };
-    hm_set(&pm->entries, name, length, e);
+    hashmap_set(&pm->entries, name, length, e);
 
     return pm->current_offset;
 }
@@ -348,7 +347,7 @@ static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
 static int asm_phase2(struct asm_program *program)
 {
     struct pseudo_map pm = {0};
-    hm_init(&pm.entries);
+    hashmap_init(&pm.entries);
 
     struct asm_function *fn = program->function;
     for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {

@@ -41,22 +41,23 @@ int main(int argc, char **argv)
     parse_args(argc, argv);
     const char *program_source = read_file(argv[1]);
 
-    /* LEXER/PARSER PHASE */
+    // Lexing and parsing
     struct ast_node *root = parse_translation_unit(program_source);
     if (!root)
         exit(1);
 
-    /* SEMANTICAL ANALYSIS */
+    // Semantical analysis
     root = sema_analysis(root);
     if (!root)
         exit(1);
 
+    // Print debug AST, after semantical analysis
     ast_print(root, 0);
 
-    /* IR */
+    // Convert AST to Three Address IR (TACKY)
     struct ir_program *ir = build_tacky(root);
 
-    /* CODEGEN */
+    // Convert IR to ASM AST and emit code
     FILE *file = fopen("a.s", "w");
     emit_x86(ir, file);
 

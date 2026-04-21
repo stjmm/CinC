@@ -16,6 +16,7 @@ struct parser {
 typedef struct ast_node* (*prefix_parse_fn)(void);
 typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
 
+// C precedences
 enum precedence {
     PREC_NONE,
     PREC_ASSIGNMENT,    // = +=
@@ -96,6 +97,8 @@ static void synchronize_block_item(void)
             case TOKEN_CONTINUE:
             case TOKEN_BREAK:
             case TOKEN_SWITCH:
+            case TOKEN_CASE:
+            case TOKEN_DEFAULT:
             case TOKEN_GOTO:
                 return;
             default:
@@ -245,6 +248,9 @@ static struct ast_node *ternary(struct ast_node *left)
     );
 }
 
+/* Each token maps to a prefix rule (how to parse) at the start of an expression,
+ * an infix rule (how to parse in the middle of an expression) and minimum
+ * precedence level for infix use. */
 static struct parse_rule parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
@@ -300,6 +306,9 @@ static struct parse_rule *get_rule(enum token_type type)
     return &parse_rules[type];
 }
 
+/* Core Pratt dispatch: parse an expression at given precedence level.
+ * Calls prefix rule for current token, then keeps consuming
+ * infix operators as long as they bind tighter than prec */
 static struct ast_node *parse_expression(enum precedence prec)
 {
     advance();
@@ -395,11 +404,7 @@ static struct ast_node *parse_statement(void)
                     if (!stmt)
                         return NULL;
 
-                    if (!body_head)
-                        body_head = stmt;
-                    else
-                        body_tail->next = stmt;
-                    body_tail = stmt;
+                    LIST_APPEND(body_head, body_tail, stmt);
                 }
 
                 struct ast_node *node = AST_NEW(AST_CASE, case_tok,
@@ -408,12 +413,7 @@ static struct ast_node *parse_statement(void)
                         .case_stmt.label = NULL
                 );
 
-                if (!cases_head)
-                    cases_head = node;
-                else
-                    cases_tail->next = node;
-                cases_tail = node;
-
+                LIST_APPEND(cases_head, cases_tail, node);
             } else if (match(TOKEN_DEFAULT)) {
                 struct token default_tok = parser_state.previous;
                 consume(TOKEN_COLON, "Expected ':' after 'default'");
@@ -426,11 +426,7 @@ static struct ast_node *parse_statement(void)
                     if (!stmt)
                         return NULL;
 
-                    if (!body_head)
-                        body_head = stmt;
-                    else
-                        body_tail->next = stmt;
-                    body_tail = stmt;
+                    LIST_APPEND(body_head, body_tail, stmt);
                 }
 
                 struct ast_node *node = AST_NEW(AST_DEFAULT, default_tok,
@@ -438,12 +434,7 @@ static struct ast_node *parse_statement(void)
                         .default_stmt.label = NULL
                 );
 
-                if (!cases_head)
-                    cases_head = node;
-                else
-                    cases_tail->next = node;
-                cases_tail = node;
-
+                LIST_APPEND(cases_head, cases_tail, node);
             } else {
                 error(&parser_state.previous, "Expected 'case' or 'default' after switch");
                 return NULL;
@@ -467,6 +458,8 @@ static struct ast_node *parse_statement(void)
         struct ast_node *for_init = NULL;
         if (match(TOKEN_INT)) {
             for_init = parse_declaration();
+            if (!for_init)
+                return NULL;
         } else if (!match(TOKEN_SEMICOLON)) {
             for_init = parse_expression(PREC_ASSIGNMENT);
             if (!for_init)
@@ -567,22 +560,25 @@ static struct ast_node *parse_statement(void)
         return AST_NEW(AST_CONTINUE, parser_state.previous, .continue_stmt.target_label = NULL);
     }
 
-    /* Expression statements */
-    
     if (match(TOKEN_SEMICOLON))
         return AST_NEW(AST_NULL_STMT, parser_state.previous);
 
+    // If didn't match with statement
+    // It's either an expression-statement or goto label
     struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
     if (!expr)
         return NULL;
 
-    // goto label
+    // We use AST_IDENTIFIER for goto labels
+    // We parsed an expression and if that expression is
+    // AST_IDENTIFIER with ':' it's a goto label
     if (expr->type == AST_IDENTIFIER) {
         if (match(TOKEN_COLON)) {
             return AST_NEW(AST_LABEL_STMT, expr->token, .label_stmt.name = expr->token);
         }
     }
 
+    // Othwerwise expression statement
     consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
     return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
 }
@@ -623,11 +619,7 @@ static struct ast_node *parse_block(void)
             continue;
         }
         
-        if (!tail)
-            block->block.first = item;
-        else
-            tail->next = item;
-        tail = item;
+        LIST_APPEND(block->block.first, tail, item);
     }
 
     if (!parser_state.had_error)
@@ -683,11 +675,7 @@ struct ast_node *parse_translation_unit(const char *source)
             continue;
         }
 
-        if (!tail) 
-            program->program.first = decl;
-        else 
-            tail->next = decl;
-        tail = decl;
+        LIST_APPEND(program->program.first, tail, decl);
     }
 
     return parser_state.had_error ? NULL : program;

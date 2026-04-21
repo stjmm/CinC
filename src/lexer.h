@@ -1,9 +1,15 @@
+/*
+ * On demand lexer for C subset.
+ * lexer_token_next() returns one at a time token.
+ */
+
 #ifndef CINC_LEXER_H
 #define CINC_LEXER_H
 
 #include <stdint.h>
 #include <stddef.h>
 
+// X-Macro for all token types
 #define TOKEN_LIST \
     /* Single character tokens */ \
     X(TOKEN_LEFT_PAREN)           \
@@ -79,12 +85,12 @@ enum token_type {
 
 struct token {
     enum token_type type;
-    const char *start;     
+    const char *start; // Pointer to original source string
     size_t length;
 
     int line;
     const char *line_start; // Line start for current token 
-    const char *resolved; // For error reporting in sema
+    const char *resolved; // Set by sema: unique name for this identifier (e.g. "x.0")
     size_t resolved_length;
 };
 

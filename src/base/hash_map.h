@@ -16,9 +16,9 @@ typedef struct {
     size_t capacity;
 } hash_map;
 
-void hm_init(hash_map *hm);
-void hm_free(hash_map *hm);
-bool hm_set(hash_map *hm, const char *key, int key_len, void *value);
-void *hm_get(hash_map *hm, const char *key, int key_len);
+void hashmap_init(hash_map *hm);
+void hashmap_free(hash_map *hm);
+bool hashmap_set(hash_map *hm, const char *key, int key_len, void *value);
+void *hashmap_get(hash_map *hm, const char *key, int key_len);
 
 #endif

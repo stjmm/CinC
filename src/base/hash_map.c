@@ -49,14 +49,14 @@ static void grow_capacity(hash_map *hm, size_t capacity)
     hm->capacity = capacity;
 }
 
-void hm_init(hash_map *hm)
+void hashmap_init(hash_map *hm)
 {
     hm->count = 0;
     hm->capacity = HM_INITIAL_CAP;
     hm->entries = calloc(hm->capacity, sizeof(hm_entry));
 }
 
-void hm_free(hash_map *hm)
+void hashmap_free(hash_map *hm)
 {
     free(hm->entries);
     hm->entries = NULL;
@@ -64,7 +64,7 @@ void hm_free(hash_map *hm)
     hm->count = 0;
 }
 
-bool hm_set(hash_map *hm, const char *key, int key_len, void *value)
+bool hashmap_set(hash_map *hm, const char *key, int key_len, void *value)
 {
     if (hm->count >= (size_t)(hm->capacity * HM_LOAD_FACTOR))
         grow_capacity(hm, hm->capacity * 2);
@@ -80,7 +80,7 @@ bool hm_set(hash_map *hm, const char *key, int key_len, void *value)
     return is_new;
 }
 
-void *hm_get(hash_map *hm, const char *key, int key_len)
+void *hashmap_get(hash_map *hm, const char *key, int key_len)
 {
     hm_entry *entry = find_entry(hm->entries, hm->capacity, key, key_len);
     return entry->key ? entry->value : NULL;

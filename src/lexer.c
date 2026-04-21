@@ -44,8 +44,10 @@ static char peek_next(void)
 
 static bool match(char expected)
 {
-    if (is_at_end()) return false;
-    if (*lexer_state.current != expected) return false;
+    if (is_at_end())
+        return false;
+    if (*lexer_state.current != expected)
+        return false;
     lexer_state.current++;
     return true;
 }
@@ -61,7 +63,8 @@ static bool is_alpha(char c)
 
 static bool is_digit(char c)
 {
-    if (c >= '0' && c <= '9') return true;
+    if (c >= '0' && c <= '9')
+        return true;
     return false;
 }
 
@@ -76,7 +79,10 @@ static struct token make_token(enum token_type type)
     return tok;
 }
 
-// Returns next token or error
+/*
+ * Skips block comments
+ * Returns next token after block comment
+ */
 static struct token block_comment(void)
 {
     while (!is_at_end()) {
@@ -143,6 +149,7 @@ static enum token_type check_keyword(unsigned int start, unsigned int length,
     return TOKEN_IDENTIFIER;
 }
 
+// Trie based keyword recognition
 static enum token_type identifier_type(void)
 {
     switch (lexer_state.start[0]) {
@@ -181,7 +188,8 @@ static enum token_type identifier_type(void)
 
 static struct token identifier(void)
 {
-    while (is_alpha(peek()) || is_digit(peek())) advance();
+    while (is_alpha(peek()) || is_digit(peek()))
+        advance();
     return make_token(identifier_type());
 }
 
@@ -190,11 +198,14 @@ struct token lexer_next_token()
     skip_whitespace();
     lexer_state.start = lexer_state.current;
 
-    if (is_at_end()) return make_token(TOKEN_EOF);
+    if (is_at_end())
+        return make_token(TOKEN_EOF);
 
     char c = advance();
-    if (is_digit(c)) return number();
-    if (is_alpha(c)) return identifier();
+    if (is_digit(c))
+        return number();
+    if (is_alpha(c))
+        return identifier();
 
     switch (c) {
         case '(': return make_token(TOKEN_LEFT_PAREN);

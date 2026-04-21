@@ -1,14 +1,36 @@
+/*
+ * AST node definitions for C.
+ * Each node has its source token for error reporting.
+ * Nodes are heap-allocated and linked via 'next' pointer
+ * to form linked lists (block items, program, switch case bodies).
+ *
+ * Sema annotates nodes in-place:
+ *  - token.resolved is set on identifier after variable_resolution
+ *  - loop/switch labels are set after label_loops()
+ *  - switch_stmt.annotation is set by annotate_switches()
+ */
 #ifndef CINC_AST_H
 #define CINC_AST_H
 
 #include "lexer.h"
 
-#define AST_NEW(_type, tok, ...) ({                                  \
-    struct ast_node *_n = calloc(1, sizeof(struct ast_node));                   \
+// Allocates and initializes a new AST node (statement expression)
+#define AST_NEW(_type, tok, ...) ({                                               \
+    struct ast_node *_n = calloc(1, sizeof(struct ast_node));                     \
     *_n = (struct ast_node){ .type = _type, .token = tok, .next = NULL, __VA_ARGS__ };\
-    _n;                                                             \
-})
+    _n;                                                                           \
+    })
 
+#define LIST_APPEND(head, tail, node)  \
+    do {                               \
+        if (!(head))                   \
+            (head) = (node);           \
+        else                           \
+            (tail)->next = (node);     \
+        (tail) = (node);               \
+    } while(0)
+
+// X-macro
 #define AST_NODE_LIST   \
     /* Expressions */   \
     X(AST_CONSTANT)     \
@@ -49,11 +71,11 @@ enum ast_type {
 
 struct ast_node {
     enum ast_type type;
-    struct token token;      // Default token
-    struct ast_node *next;   // Linked-list for block or program (default NULL)
+    struct token token;      // Primary token for this node
+    struct ast_node *next;   // Linked list: next node in block/program etc.
     union {
         struct { long value; } constant;
-        struct { struct ast_node *expr; } unary;
+        struct { struct ast_node *expr; } unary; // Also used by AST_PRE, AST_POST
         struct {
             struct ast_node *left;
             struct ast_node *right;
@@ -82,7 +104,7 @@ struct ast_node {
         struct {
             struct ast_node *condition;
             struct ast_node *body;
-            const char *label;
+            const char *label; // Unique label assigned by sema for break/continue targeting, same for 'do_while' and 'for_stmt' nodes
         } while_stmt;
         struct {
             struct ast_node *body;
@@ -90,7 +112,7 @@ struct ast_node {
             const char *label;
         } do_while;
         struct {
-            struct ast_node *for_init;
+            struct ast_node *for_init;  // Declaration or expression
             struct ast_node *condition;
             struct ast_node *post;
             struct ast_node *body;
@@ -98,8 +120,8 @@ struct ast_node {
         } for_stmt;
         struct {
             struct ast_node *value;
-            struct ast_node *first;
-            const char *label;
+            struct ast_node *first; // List of statements in this case
+            const char *label;      // Unique label assigned by sema
         } case_stmt;
         struct {
             struct ast_node *first;
@@ -107,9 +129,9 @@ struct ast_node {
         } default_stmt;
         struct {
             struct ast_node *condition;
-            struct ast_node *cases; // List of AST_CASE / AST_DEFAULT
+            struct ast_node *cases; // Linked-list of AST_CASE / AST_DEFAULT
             const char *label;
-            struct switch_annotation *annotation;
+            struct switch_annotation *annotation; // Filled by sema, used by IR
         } switch_stmt;
         struct { const char *target_label; } break_stmt;
         struct { const char *target_label; } continue_stmt;
