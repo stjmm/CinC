@@ -528,7 +528,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
                 emit_jump(fn, break_label);
             }
 
-            // Emit case bodies - labels are placed by AST_CASE / AST_DEFAULT handlers
+            // Emit switch body - labels are placed by AST_CASE / AST_DEFAULT handlers
             emit_block_item(node->switch_stmt.body, fn);
 
             emit_label(fn, break_label);

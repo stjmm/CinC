@@ -294,9 +294,11 @@ static void resolve_labels(struct ast_node *node)
             else
                 hashmap_set(&labels, tok->start, tok->length, node);
 
-            if (node->next != NULL && node->next->type == AST_DECLARATION)
+            // C23 allows this, C11 doesn't
+            if (node->label_stmt.stmt != NULL && node->label_stmt.stmt->type == AST_DECLARATION)
                 error(tok, "Label cannot be followed by a declaration");
 
+            // Label has a statement, so we need to resolve it
             resolve_labels(node->label_stmt.stmt);
             break;
         }

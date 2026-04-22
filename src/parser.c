@@ -550,7 +550,7 @@ static struct ast_node *parse_statement(void)
     if (match(TOKEN_SEMICOLON))
         return AST_NEW(AST_NULL_STMT, parser_state.previous);
 
-    // If didn't match with statement
+    // If didn't match with any statement
     // It's either an expression-statement or goto label
     struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
     if (!expr)

@@ -1,3 +1,14 @@
+/*
+ * Tacky IR -> x86-64 Assembly (AT&T Syntax)
+ *
+ * Phase 1: Convert IR instructions into ASM instructions
+ *          keeps pseudo (temporary) operands
+ *
+ * Phase 2: Replace every pseudo operand with a stack slot.
+ *          Returns total needed stack size
+ *
+ * Phase 3: Function prologue, rewrite any illegal x86 ops.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -7,7 +18,9 @@
 #include "ir.h"
 #include "base/hash_map.h"
 
-/* Phase 1: Convert TACKY IR to ASM AST. Keeps temporary variables (pseduos) */
+#define STACK_SLOT_SIZE 4
+
+/* Phase 1: Build ASM AST from IR AST */
 
 static enum asm_op convert_unop(enum ir_unary_op op)
 {
@@ -136,6 +149,7 @@ static struct asm_instr *make_label(int label_id)
 static struct asm_instr *make_ret(void)   { return alloc_instr(ASM_RET); }
 static struct asm_instr *make_cdq(void)   { return alloc_instr(ASM_CDQ); }
 
+// Convert 'ir_val' to ASM operand (immediate or pseudo)
 static struct operand convert_val(struct ir_val v)
 {
     if (v.type == IR_VAL_CONSTANT) {
@@ -180,6 +194,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
 {
     switch (instr->type) {
         case IR_RETURN: {
+            // return val -> movl val, %eax
             struct operand src = convert_val(instr->ret.src);
 
             append_instr(fn, make_mov(src, make_reg(REG_AX)));
@@ -191,12 +206,21 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             struct operand dst = convert_val(instr->unary.dst);
 
             if (instr->unary.op == IR_NOT) {
+                /*
+                * Logical NOT: compare src to zero, set dst to the zero flag
+                * cmpl $0, src
+                * movl $0, dst
+                * sete dst
+                */
                 append_instr(fn, make_cmp(make_imm(0), src));
                 append_instr(fn, make_mov(make_imm(0), dst));
                 append_instr(fn, make_setcc(COND_E, dst));
                 break;
             }
 
+            // Bitwise NOT, Arithmetic negation
+            // movl src, dst
+            // op dst
             append_instr(fn, make_mov(src, dst));
             append_instr(fn, make_unary(convert_unop(instr->unary.op), dst));
             break;
@@ -207,8 +231,14 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             struct operand dst = convert_val(instr->binary.dst);
             enum ir_binary_op op = instr->binary.op;
 
-            // Converts Binary to Mov(src, AX), Cdq, Idiv(src), Mov(AX/DX, dst)
             if (op == IR_DIVIDE || op == IR_REMAINDER) {
+                /*
+                 * Signed division: x86 IDIV divides EDX:EAX by the operand
+                 * movl src1, %eax
+                 * cdq              <- sign extend EAX into EDX:EAX
+                 * idivl src2
+                 * movl %eax/%edx, dst (quotient/remainder)
+                 */
                 append_instr(fn, make_mov(src1, make_reg(REG_AX)));
                 append_instr(fn, make_cdq());
                 append_instr(fn, make_idiv(src2));
@@ -217,11 +247,23 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             } else if (op == IR_EQUAL || op == IR_NOT_EQUAL ||
                 op == IR_LESS || op == IR_LESS_EQUAL ||
                 op == IR_GREATER || op == IR_GREATER_EQUAL) {
+                /*
+                 * Compare, zero dest, then set
+                 * cmpl src2, src1
+                 * movl $0, dst
+                 * setcc dst
+                 */
                 append_instr(fn, make_cmp(src2, src1));
                 append_instr(fn, make_mov(make_imm(0), dst));
                 append_instr(fn, make_setcc(convert_to_cond(op), dst));
                 break;
             } else if (op == IR_AND || op == IR_OR || op == IR_XOR) {
+                /*
+                 * Bitwise ops route through %eax
+                 * movl src1, %eax
+                 * op src2, %eax
+                 * mov %eax, dst
+                 */
                 struct operand ax = make_reg(REG_AX);
 
                 append_instr(fn, make_mov(src1, ax));
@@ -229,6 +271,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_mov(ax, dst));
                 break;
             } else if (instr->binary.op == IR_SHIFT_LEFT || instr->binary.op == IR_SHIFT_RIGHT) {
+                // Shifts: count must be immediate or %cx
                 struct operand ax = make_reg(REG_AX);
                 struct operand count;
 
@@ -247,11 +290,14 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             }
 
             // ADD, SUB, IMUL
+            // movl src1, dst
+            // op src2, dst
             append_instr(fn, make_mov(src1, dst));
             append_instr(fn, make_binary(convert_binop(op), src2, dst));
             break;
         }
         case IR_JUMP_IF_ZERO: {
+            // if (!cond) goto label -> cmpl $0, val, je
             struct operand val = convert_val(instr->jump_if_zero.cond);
 
             append_instr(fn, make_cmp(val, make_imm(0)));
@@ -259,6 +305,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             break;
         }
         case IR_JUMP_IF_NOT_ZERO: {
+            // if (cond) goto label -> cmpl $0, val, jne
             struct operand val = convert_val(instr->jump_if_not_zero.cond);
 
             append_instr(fn, make_cmp(val, make_imm(0)));
@@ -303,12 +350,12 @@ static struct asm_program *asm_phase1(struct ir_program *ir)
     return program;
 }
 
-/* Phase 2: Replace pseduo operands with stack slots */
+/* Phase 2: Replace pseduo operands with RBP-relative stack slots */
 
 struct pseudo_entry {
     const char *name;
     int length;
-    int stack_offset;
+    int stack_offset; // Negative offset from %rbp
 };
 
 struct pseudo_map {
@@ -322,7 +369,8 @@ static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name, int
     if (e)
         return e->stack_offset;
 
-    pm->current_offset -= 4;
+    pm->current_offset -= STACK_SLOT_SIZE;
+
     e = malloc(sizeof(struct pseudo_entry));
     *e = (struct pseudo_entry){
         .name         = name,
@@ -344,6 +392,7 @@ static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
     oper->stack = offset;
 }
 
+// Walk the instruction list, replace every pseudo
 static int asm_phase2(struct asm_program *program)
 {
     struct pseudo_map pm = {0};
@@ -383,6 +432,16 @@ static int asm_phase2(struct asm_program *program)
 
 
 /* Phase 3: Fix illegal operator-operator combos */
+/*
+ * x86 contrains addressed here:
+ * MOV mem, mem -> MOV mem, %r10d / MOV %r10d, mem
+ * IMUL src, mem -> MOV mem, %r11d / IMUL src, %r11d / MOV %r11d, mem
+ * <op> mem, mem -> MOV src, %r10d / <op> %r10d, dst
+ * SHIFT mem, dst -> MOV src, %ecx / SHIFT %cl, dst
+ * IDIV $imm -> MOV $imm, %r10d / IDIV %r10d
+ * CMP mem, mem -> MOV oper1, %r10d / CMP %r10d, oper2
+ * CMP oper1, $imm -> MOV $imm, %r11d / CMP oper1, %r11d
+ */
 static void asm_phase3(struct asm_program *program, int stack_size)
 {
     struct asm_function *fn = program->function;
@@ -547,6 +606,7 @@ static void emit_operand(FILE *file, struct operand op, bool use_8bit)
             break;
         case OPERAND_IMM:
             fprintf(file, "$%d", op.imm);
+            break;
         default:
             break;
     }
@@ -647,5 +707,6 @@ void emit_x86(struct ir_program *ir, FILE *file)
         instr = instr->next;
     }
     
+    // Linux/ELF requirement
     fprintf(file, "\n    .section .note.GNU-stack,\"\",@progbits\n");
 }
