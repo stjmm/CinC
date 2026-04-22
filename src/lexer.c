@@ -266,6 +266,7 @@ struct token lexer_next_token()
         case ';': return make_token(TOKEN_SEMICOLON);
         case ':': return make_token(TOKEN_COLON);
         case '?': return make_token(TOKEN_QUESTION_MARK);
+        case ',': return make_token(TOKEN_COMMA);
     }
 
     return make_token(TOKEN_ERROR);

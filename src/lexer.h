@@ -20,6 +20,7 @@
     X(TOKEN_RIGHT_BRACKET)        \
     X(TOKEN_SEMICOLON)            \
     X(TOKEN_COLON)                \
+    X(TOKEN_COMMA)                \
     X(TOKEN_QUESTION_MARK)        \
     /* One or two char tokens */  \
     X(TOKEN_PLUS)                 \
