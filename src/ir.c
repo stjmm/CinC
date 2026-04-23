@@ -337,11 +337,11 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             emit_return(fn, emit_expr(node->return_stmt.expr, fn));
             break;
         }
-        case AST_DECLARATION: {
+        case AST_VAR_DECL: {
             // Emits copy to lvalue if there is initializer
-            if (node->declaration.init) {
-                struct ir_val lvalue = make_var(&node->declaration.name->token);
-                struct ir_val rvalue = emit_expr(node->declaration.init, fn);
+            if (node->var_decl.init) {
+                struct ir_val lvalue = make_var(&node->var_decl.name);
+                struct ir_val rvalue = emit_expr(node->var_decl.init, fn);
                 emit_copy(fn, rvalue, lvalue);
             }
             break;
@@ -418,7 +418,7 @@ static void emit_block_item(struct ast_node *node, struct ir_function *fn)
             register_loop_switch(node->for_stmt.label, break_label, continue_label);
 
             if (node->for_stmt.for_init) {
-                if (node->for_stmt.for_init->type == AST_DECLARATION)
+                if (node->for_stmt.for_init->type == AST_VAR_DECL)
                     emit_block_item(node->for_stmt.for_init, fn);
                 else
                     emit_expr(node->for_stmt.for_init, fn);
@@ -565,7 +565,7 @@ static struct ir_function *emit_function(struct ast_node *fn_node)
     hashmap_init(&goto_labels);
     hashmap_init(&loop_switch_labels_map);
 
-    for (struct ast_node *item = fn_node->function.body->block.first; item != NULL; item = item->next)
+    for (struct ast_node *item = fn_node->fun_decl.body->block.first; item != NULL; item = item->next)
         emit_block_item(item, fn);
 
 

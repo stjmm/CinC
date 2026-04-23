@@ -42,6 +42,7 @@
     X(AST_POST)         \
     X(AST_ASSIGNMENT)   \
     X(AST_TERNARY)      \
+    X(AST_CALL)         \
     /* Statements */    \
     X(AST_EXPR_STMT)    \
     X(AST_NULL_STMT)    \
@@ -59,8 +60,8 @@
     X(AST_CASE)         \
     X(AST_DEFAULT)      \
     /* Declarations */  \
-    X(AST_DECLARATION)  \
-    X(AST_FUNCTION)     \
+    X(AST_VAR_DECL)     \
+    X(AST_FUN_DECL)     \
     /* Top level */     \
     X(AST_PROGRAM)      
 
@@ -90,6 +91,10 @@ struct ast_node {
             struct ast_node *then;
             struct ast_node *else_then;
         } ternary;
+        struct {
+            struct token name;
+            struct ast_node *args;
+        } call;
 
         struct { struct ast_node *expr; } expr_stmt;
         struct { struct ast_node *expr; } return_stmt;
@@ -140,14 +145,15 @@ struct ast_node {
         struct { struct ast_node *first; } block;
 
         struct {
-            struct ast_node *name;
+            struct token name;
             struct ast_node *init;
-        } declaration;
+        } var_decl;
         struct {
-            struct ast_node *name;
+            struct token name;
             struct ast_node *body;
+            struct ast_node *params;
             struct token return_type;
-        } function;
+        } fun_decl;
 
         struct { struct ast_node *first; } program;
     };

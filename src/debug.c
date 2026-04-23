@@ -264,11 +264,11 @@ void ast_print(struct ast_node *node, int depth)
             INDENT(); printf(")\n");
             break;
 
-        case AST_DECLARATION:
+        case AST_VAR_DECL:
             INDENT(); printf("(decl %.*s", (int)node->token.length, node->token.start);
-            if (node->declaration.init) {
+            if (node->var_decl.init) {
                 printf(" = ");
-                print_expr(node->declaration.init);
+                print_expr(node->var_decl.init);
             }
             printf(")\n");
             break;
@@ -280,11 +280,11 @@ void ast_print(struct ast_node *node, int depth)
             INDENT(); printf(")\n");
             break;
 
-        case AST_FUNCTION:
+        case AST_FUN_DECL:
             INDENT(); printf("(fn %.*s -> %.*s\n",
                 (int)node->token.length, node->token.start,
-                (int)node->function.return_type.length, node->function.return_type.start);
-            ast_print(node->function.body, depth + 1);
+                (int)node->fun_decl.return_type.length, node->fun_decl.return_type.start);
+            ast_print(node->fun_decl.body, depth + 1);
             INDENT(); printf(")\n");
             break;
 

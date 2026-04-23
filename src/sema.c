@@ -168,7 +168,7 @@ static struct ast_node *resolve_expr(struct ast_node *expr, struct scope *s)
 
 static struct ast_node *resolve_declaration(struct ast_node *decl, struct scope *s)
 {
-    struct token *tok = &decl->declaration.name->token;
+    struct token *tok = &decl->var_decl.name;
     char *unique = make_unique(tok->start, tok->length);
     
     if (scope_declare(s, tok->start, tok->length, unique) < 0) {
@@ -177,8 +177,8 @@ static struct ast_node *resolve_declaration(struct ast_node *decl, struct scope 
         return NULL;
     }
 
-    if (decl->declaration.init)
-        decl->declaration.init = resolve_expr(decl->declaration.init, s);
+    if (decl->var_decl.init)
+        decl->var_decl.init = resolve_expr(decl->var_decl.init, s);
 
     tok->resolved = unique;
     tok->resolved_length = strlen(unique);
@@ -219,7 +219,7 @@ static struct ast_node *resolve_statement(struct ast_node *stmt, struct scope *s
             struct scope *new_scope = scope_push(s);
             struct ast_node *for_init = stmt->for_stmt.for_init;
             if (for_init) {
-                if (for_init->type == AST_DECLARATION)
+                if (for_init->type == AST_VAR_DECL)
                     resolve_declaration(for_init, new_scope);
                 else
                     resolve_expr(for_init, new_scope);
@@ -270,7 +270,7 @@ static struct ast_node *resolve_block(struct ast_node *block, struct scope *pare
     struct scope *s = scope_push(parent);
 
     for (struct ast_node *item = block->block.first; item != NULL; item = item->next) {
-        if (item->type == AST_DECLARATION)
+        if (item->type == AST_VAR_DECL)
             resolve_declaration(item, s);
         else
             resolve_statement(item, s);
@@ -295,7 +295,7 @@ static void resolve_labels(struct ast_node *node)
                 hashmap_set(&labels, tok->start, tok->length, node);
 
             // C23 allows this, C11 doesn't
-            if (node->label_stmt.stmt != NULL && node->label_stmt.stmt->type == AST_DECLARATION)
+            if (node->label_stmt.stmt != NULL && node->label_stmt.stmt->type == AST_VAR_DECL)
                 error(tok, "Label cannot be followed by a declaration");
 
             // Label has a statement, so we need to resolve it
@@ -555,10 +555,10 @@ static struct ast_node *resolve_function(struct ast_node *fn)
 {
     hashmap_init(&labels);
 
-    resolve_labels(fn->function.body);
-    resolve_block(fn->function.body, NULL);
-    resolve_break_continue(fn->function.body, NULL);
-    resolve_switches(fn->function.body);
+    resolve_labels(fn->fun_decl.body);
+    resolve_block(fn->fun_decl.body, NULL);
+    resolve_break_continue(fn->fun_decl.body, NULL);
+    resolve_switches(fn->fun_decl.body);
 
     hashmap_free(&labels);
     return fn;

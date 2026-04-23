@@ -248,16 +248,39 @@ static struct ast_node *ternary(struct ast_node *left)
     );
 }
 
+static struct ast_node *call(struct ast_node *left)
+{
+    struct token call_tok = parser_state.previous;
+    struct ast_node *args_head = NULL;
+    struct ast_node *args_tail = NULL;
+
+    if (!check(TOKEN_RIGHT_PAREN)) {
+        do {
+            struct ast_node *arg = parse_expression(PREC_ASSIGNMENT);
+            if (!arg)
+                return NULL;
+            LIST_APPEND(args_head, args_tail, arg);
+        } while (match(TOKEN_COMMA));
+    }
+
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after arguments");
+    return AST_NEW(AST_CALL, call_tok,
+            .call.name = left->token,
+            .call.args = args_head
+    );
+}
+
 /* Each token maps to a prefix rule at the start of an expression,
  * an infix rule and minimum precedence level for infix use. */
 static struct parse_rule parse_rules[] = {
-    [TOKEN_LEFT_PAREN]    = {grouping, NULL, PREC_NONE},
+    [TOKEN_LEFT_PAREN]    = {grouping, call, PREC_POSTFIX},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
     [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
+    [TOKEN_COMMA]         = {NULL, NULL, PREC_NONE},
     [TOKEN_QUESTION_MARK] = {NULL, ternary, PREC_TERNARY},
     [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
     [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
@@ -579,7 +602,7 @@ static struct ast_node *parse_declaration(void)
     struct token return_type = parser_state.previous;
 
     consume(TOKEN_IDENTIFIER, "Expected variable name");
-    struct ast_node *name = AST_NEW(AST_IDENTIFIER, parser_state.previous);
+    struct token name = parser_state.previous;
 
     struct ast_node *init = NULL;
     if (match(TOKEN_EQUAL))
@@ -587,9 +610,9 @@ static struct ast_node *parse_declaration(void)
 
     consume(TOKEN_SEMICOLON, "Expected ';' after variable");
     
-    return AST_NEW(AST_DECLARATION, name->token, 
-            .declaration.name = name,
-            .declaration.init = init
+    return AST_NEW(AST_VAR_DECL, name, 
+            .var_decl.name = name,
+            .var_decl.init = init
     );
 }
 
@@ -624,22 +647,47 @@ static struct ast_node *parse_block(void)
 static struct ast_node *parse_function(void)
 {
     struct token return_type = parser_state.previous;
-
     consume(TOKEN_IDENTIFIER, "Expected function name");
     struct token name_tok = parser_state.previous;
-    struct ast_node *name = AST_NEW(AST_IDENTIFIER, parser_state.previous);
-
     consume(TOKEN_LEFT_PAREN, "Expected '(' after function name");
-    consume(TOKEN_VOID, "Expected 'void' in parameters list");
+
+    struct ast_node *params_head = NULL;
+    struct ast_node *params_tail = NULL;
+
+    if (check(TOKEN_VOID)) {
+        advance();
+        if (!check(TOKEN_RIGHT_PAREN)) {
+            error(&parser_state.previous, "'void' must be the only parameter");
+            return NULL;
+        }
+    }
+    if (!check(TOKEN_RIGHT_PAREN)) {
+        do {
+            if (check(TOKEN_VOID)) {
+                error(&parser_state.previous, "'void' must be the only parameter");
+                return NULL;
+            }
+            struct ast_node *param = parse_declaration();
+            if (!param)
+                return NULL;
+            LIST_APPEND(params_head, params_tail, param);
+        } while (match(TOKEN_COMMA));
+    }
+
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name");
 
-    consume(TOKEN_LEFT_BRACE, "Expected '{' before function body");
-    struct ast_node *body = parse_block();
+    struct ast_node *body = NULL;
+    if (match(TOKEN_LEFT_BRACE))
+        body = parse_block();
+    else
+        consume(TOKEN_SEMICOLON, "Expected '{' or ';' after function declaration");
 
-    return AST_NEW(AST_FUNCTION, name_tok,
-        .function.name = name,
-        .function.return_type = return_type,
-        .function.body = body);
+    return AST_NEW(AST_FUN_DECL, name_tok,
+        .fun_decl.name = name_tok,
+        .fun_decl.body = body,
+        .fun_decl.params = NULL,
+        .fun_decl.return_type = return_type
+    );
 }
 
 static struct ast_node *parse_external_declaration(void)
