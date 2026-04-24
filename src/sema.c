@@ -126,6 +126,21 @@ static struct ast_node *resolve_expr(struct ast_node *expr, struct scope *s)
 
             return expr;
         }
+        case AST_CALL: {
+            struct symbol *sym = scope_resolve(s, expr->call.name.start, expr->call.name.length);
+            if (!sym) {
+                error(&expr->call.name, "Undeclared function");
+                return NULL;
+            }
+
+            expr->call.name.resolved = sym->unique_name;
+            expr->call.name.resolved_length = strlen(sym->unique_name);
+
+            for (struct ast_node *arg = expr->call.args; arg; arg = arg->next)
+                arg = resolve_expr(arg, s);
+
+            return expr;
+        }
         case AST_ASSIGNMENT: {
             if (expr->assignment.lvalue->type != AST_IDENTIFIER) {
                 error(&expr->token, "Invalid lvalue in assignment");

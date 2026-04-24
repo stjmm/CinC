@@ -116,6 +116,7 @@ static void synchronize_translation_unit(void)
     while (parser_state.current.type != TOKEN_EOF) {
         switch (parser_state.current.type) {
             case TOKEN_INT:
+            case TOKEN_VOID:
                 return;
             default:
                 break;
@@ -124,6 +125,7 @@ static void synchronize_translation_unit(void)
         advance();
     }
 }
+
 
 static bool check(enum token_type type)
 {
@@ -203,8 +205,7 @@ static struct ast_node *binary(struct ast_node *left)
     struct parse_rule *rule = get_rule(op.type);
     struct ast_node *right = parse_expression(rule->prec + 1);
 
-    if (!right)
-        return NULL;
+    if (!right) return NULL;
     return AST_NEW(AST_BINARY, op, .binary.left = left, .binary.right = right);
 }
 
@@ -213,8 +214,7 @@ static struct ast_node *assignment(struct ast_node *left)
     struct token op = parser_state.previous;
 
     struct ast_node *right = parse_expression(PREC_ASSIGNMENT);
-    if (!right)
-        return NULL;
+    if (!right) return NULL;
 
     return AST_NEW(AST_ASSIGNMENT, op,
             .assignment.lvalue = left,
@@ -597,10 +597,8 @@ static struct ast_node *parse_statement(void)
     return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
 }
 
-static struct ast_node *parse_declaration(void)
+static struct ast_node *parse_declarator(void)
 {
-    struct token return_type = parser_state.previous;
-
     consume(TOKEN_IDENTIFIER, "Expected variable name");
     struct token name = parser_state.previous;
 
@@ -608,12 +606,17 @@ static struct ast_node *parse_declaration(void)
     if (match(TOKEN_EQUAL))
         init = parse_expression(PREC_ASSIGNMENT);
 
-    consume(TOKEN_SEMICOLON, "Expected ';' after variable");
-    
     return AST_NEW(AST_VAR_DECL, name, 
             .var_decl.name = name,
             .var_decl.init = init
     );
+}
+
+static struct ast_node *parse_declaration(void)
+{
+    struct ast_node *declarator = parse_declarator();
+    consume(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
+    return declarator;
 }
 
 static struct ast_node *parse_block(void)
@@ -660,14 +663,14 @@ static struct ast_node *parse_function(void)
             error(&parser_state.previous, "'void' must be the only parameter");
             return NULL;
         }
-    }
-    if (!check(TOKEN_RIGHT_PAREN)) {
+    } else if (!check(TOKEN_RIGHT_PAREN)) {
         do {
             if (check(TOKEN_VOID)) {
                 error(&parser_state.previous, "'void' must be the only parameter");
                 return NULL;
             }
-            struct ast_node *param = parse_declaration();
+            consume(TOKEN_INT, "Expected parameter type.");
+            struct ast_node *param = parse_declarator();
             if (!param)
                 return NULL;
             LIST_APPEND(params_head, params_tail, param);
@@ -684,8 +687,8 @@ static struct ast_node *parse_function(void)
 
     return AST_NEW(AST_FUN_DECL, name_tok,
         .fun_decl.name = name_tok,
+        .fun_decl.params = params_head,
         .fun_decl.body = body,
-        .fun_decl.params = NULL,
         .fun_decl.return_type = return_type
     );
 }

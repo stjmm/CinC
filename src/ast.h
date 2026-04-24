@@ -150,8 +150,8 @@ struct ast_node {
         } var_decl;
         struct {
             struct token name;
-            struct ast_node *body;
             struct ast_node *params;
+            struct ast_node *body;
             struct token return_type;
         } fun_decl;
 
