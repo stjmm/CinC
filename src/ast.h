@@ -13,7 +13,10 @@
 #ifndef CINC_AST_H
 #define CINC_AST_H
 
+#include <stdbool.h>
+
 #include "lexer.h"
+#include "sema.h"
 
 // Allocates and initializes a new AST node (statement expression)
 #define AST_NEW(_type, tok, ...) ({                                               \
@@ -75,9 +78,23 @@ struct ast_node {
     enum ast_type type;
     struct token token;      // Primary token for this node
     struct ast_node *next;   // Linked list: next node in block/program etc.
+
+    /*
+     * For expressions defined by semantic analysis.
+     * For declarations: same as declared type
+     */
+    struct type *ctype;
+
     union {
-        struct { long value; } constant;
-        struct { struct ast_node *expr; } unary; // Also used by AST_PRE, AST_POST
+        struct {
+            long value;
+        } constant;
+        struct {
+            struct symbol *symbol;
+        } identifier;
+        struct {
+            struct ast_node *expr;
+        } unary;
         struct {
             struct ast_node *left;
             struct ast_node *right;
@@ -92,26 +109,32 @@ struct ast_node {
             struct ast_node *else_then;
         } ternary;
         struct {
-            struct token name;
+            struct ast_node *calle;
             struct ast_node *args;
         } call;
 
-        struct { struct ast_node *expr; } expr_stmt;
-        struct { struct ast_node *expr; } return_stmt;
+        struct {
+            struct ast_node *expr;
+        } expr_stmt;
+        struct {
+            struct ast_node *expr;
+        } return_stmt;
         struct {
             struct ast_node *condition;
             struct ast_node *then;
             struct ast_node *else_then;
         } if_stmt;
-        struct { struct token label; } goto_stmt;
+        struct {
+            struct token label;
+        } goto_stmt;
         struct {
             struct token name;
-            struct ast_node *stmt; // "Owns" statement under label - must be handled in sema, ir passes
+            struct ast_node *stmt; // Statement to which label points to
         } label_stmt;
         struct {
             struct ast_node *condition;
             struct ast_node *body;
-            const char *label; // Unique label assigned by sema for break/continue targeting, same for 'do_while' and 'for_stmt' nodes
+            const char *label; // Unique label for break/continue
         } while_stmt;
         struct {
             struct ast_node *body;
@@ -128,7 +151,7 @@ struct ast_node {
         struct {
             struct ast_node *value;
             struct ast_node *first; // List of statements in this case
-            const char *label;      // Unique label assigned by sema
+            const char *label;      // Unique label for switch
         } case_stmt;
         struct {
             struct ast_node *first;
@@ -140,19 +163,50 @@ struct ast_node {
             const char *label;
             struct switch_annotation *annotation; // Filled by sema, used by IR
         } switch_stmt;
-        struct { const char *target_label; } break_stmt;
-        struct { const char *target_label; } continue_stmt;
-        struct { struct ast_node *first; } block;
+        struct {
+            const char *target_label;
+        } break_stmt;
+        struct {
+            const char *target_label;
+        } continue_stmt;
+        struct {
+            struct ast_node *first;
+        } block;
 
+        /*
+         * This is used for:
+         *  file-scope objects
+         *  block-scope objects
+         *  function parameters
+         */
         struct {
             struct token name;
+            struct type *type;
+            enum storage_class storage;
             struct ast_node *init;
+
+            bool is_parameter;
+            bool is_definition;
+            bool is_tentative;
+
+            struct symbol *symbol;
         } var_decl;
+
+        /*
+         * body == NULL means declaration/prototype
+         * body != NULL means function definition
+         */
         struct {
             struct token name;
+            struct type *type;
+            enum storage_class storage;
+
             struct ast_node *params;
             struct ast_node *body;
-            struct token return_type;
+
+            bool is_definition;
+
+            struct symbol *symbol;
         } fun_decl;
 
         struct { struct ast_node *first; } program;

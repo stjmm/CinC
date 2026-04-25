@@ -62,6 +62,9 @@
     /* Keywords */                \
     X(TOKEN_INT)                  \
     X(TOKEN_VOID)                 \
+    X(TOKEN_EXTERN)               \
+    X(TOKEN_STATIC)               \
+    X(TOKEN_AUTO)                 \
     X(TOKEN_RETURN)               \
     X(TOKEN_IF)                   \
     X(TOKEN_ELSE)                 \
@@ -86,13 +89,11 @@ enum token_type {
 
 struct token {
     enum token_type type;
-    const char *start; // Pointer to original source string
+    const char *start;      // Pointer to original source string
     size_t length;
 
     int line;
     const char *line_start; // Line start for current token 
-    const char *resolved; // Set by sema: unique name for this identifier (e.g. "x.0")
-    size_t resolved_length;
 };
 
 void lexer_init(const char *source);

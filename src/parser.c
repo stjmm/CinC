@@ -5,6 +5,8 @@
 #include "parser.h"
 #include "ast.h"
 #include "lexer.h"
+#include "sema.h"
+#include "type.h"
 
 struct parser {
     struct token previous;
@@ -42,7 +44,33 @@ struct parse_rule {
     enum precedence prec;
 };
 
+struct decl_specs {
+    enum storage_class storage;
+    struct type *base_type;
+};
+
+struct parsed_declarator {
+    struct token name;
+    struct type *type;
+    struct ast_node *params;
+};
+
+struct param_list {
+    struct ast_node *head;
+    struct ast_node *tail;
+
+    struct type **types;
+    size_t count;
+
+    bool is_variadic;
+};
+
 static struct parser parser_state;
+
+static struct ast_node *parse_declaration(bool is_file_scope);
+static struct ast_node *parse_parameter_declaration(void);
+static struct ast_node *parse_statement(void);
+static struct ast_node *parse_block(void);
 
 static void error(struct token *tok, const char *message)
 {
@@ -149,6 +177,19 @@ static bool match(enum token_type type)
         return true;
     }
     return false;
+}
+
+static bool is_declaration_specifier(enum token_type type)
+{
+    switch (type) {
+        case TOKEN_VOID:
+        case TOKEN_INT:
+        case TOKEN_STATIC:
+        case TOKEN_EXTERN:
+            return true;
+        default:
+            return false;
+    }
 }
 
 /* Expression parsing (Pratt) */
@@ -265,7 +306,7 @@ static struct ast_node *call(struct ast_node *left)
 
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after arguments");
     return AST_NEW(AST_CALL, call_tok,
-            .call.name = left->token,
+            .call.calle = left,
             .call.args = args_head
     );
 }
@@ -279,19 +320,28 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
+
     [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
+    [TOKEN_COLON]         = {NULL, NULL, PREC_NONE},
     [TOKEN_COMMA]         = {NULL, NULL, PREC_NONE},
     [TOKEN_QUESTION_MARK] = {NULL, ternary, PREC_TERNARY},
+
     [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
     [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
     [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
     [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
     [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
+
     [TOKEN_BANG]          = {unary, NULL, PREC_NONE},
     [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
+
     [TOKEN_CARET]         = {NULL, binary, PREC_BITWISE_XOR},
+    [TOKEN_OR]            = {NULL, binary, PREC_BITWISE_OR},
+    [TOKEN_AND]           = {NULL, binary, PREC_BITWISE_AND},
+
     [TOKEN_MINUS_MINUS]   = {pre, post, PREC_POSTFIX},
     [TOKEN_PLUS_PLUS]     = {pre, post, PREC_POSTFIX},
+
     [TOKEN_EQUAL]         = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_PLUS_EQUAL]    = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_MINUS_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
@@ -303,6 +353,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_CARET_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_LESS_LESS_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
     [TOKEN_GREATER_GREATER_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
+
     [TOKEN_EQUAL_EQUAL]   = {NULL, binary, PREC_EQUALITY},
     [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
     [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},
@@ -311,14 +362,27 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_GREATER]       = {NULL, binary, PREC_COMPARISON},
     [TOKEN_GREATER_EQUAL] = {NULL, binary, PREC_COMPARISON},
     [TOKEN_GREATER_GREATER] = {NULL, binary, PREC_BITWISE_SHIFT},
-    [TOKEN_AND_AND]       = {NULL, binary, PREC_AND},
-    [TOKEN_OR_OR]         = {NULL, binary, PREC_OR},
-    [TOKEN_OR]            = {NULL, binary, PREC_BITWISE_OR},
-    [TOKEN_AND]           = {NULL, binary, PREC_BITWISE_AND},
+
     [TOKEN_IDENTIFIER]    = {identifier, NULL, PREC_NONE},
     [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
+
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_VOID]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_EXTERN]        = {NULL, NULL, PREC_NONE},
+    [TOKEN_AUTO]          = {NULL, NULL, PREC_NONE},
     [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
+    [TOKEN_IF]            = {NULL, NULL, PREC_NONE},
+    [TOKEN_ELSE]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_FOR]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_WHILE]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_DO]            = {NULL, NULL, PREC_NONE},
+    [TOKEN_BREAK]         = {NULL, NULL, PREC_NONE},
+    [TOKEN_CONTINUE]      = {NULL, NULL, PREC_NONE},
+    [TOKEN_SWITCH]        = {NULL, NULL, PREC_NONE},
+    [TOKEN_CASE]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_DEFAULT]       = {NULL, NULL, PREC_NONE},
+    [TOKEN_GOTO]          = {NULL, NULL, PREC_NONE},
+
     [TOKEN_ERROR]         = {NULL, NULL, PREC_NONE},
     [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
 };
@@ -349,9 +413,6 @@ static struct ast_node *parse_expression(enum precedence prec)
 
     return left;
 }
-
-static struct ast_node *parse_block(void);
-static struct ast_node *parse_declaration(void);
 
 static struct ast_node *parse_statement(void)
 {
@@ -409,8 +470,10 @@ static struct ast_node *parse_statement(void)
         while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
                 !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
             struct ast_node *stmt = parse_statement();
+
             if (!stmt)
                 return NULL;
+
             LIST_APPEND(body_head, body_tail, stmt);
         }
 
@@ -430,8 +493,10 @@ static struct ast_node *parse_statement(void)
         while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
                 !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
             struct ast_node *stmt = parse_statement();
+
             if (!stmt)
                 return NULL;
+
             LIST_APPEND(body_head, body_tail, stmt);
         }
 
@@ -446,7 +511,7 @@ static struct ast_node *parse_statement(void)
         consume(TOKEN_LEFT_PAREN, "Expected '(' after 'switch'");
         struct ast_node *cond = parse_expression(PREC_ASSIGNMENT);
         if (!cond) return NULL;
-        consume(TOKEN_RIGHT_PAREN, "Expected '(' after 'switch'");
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'switch' condition");
 
         struct ast_node *body = parse_statement();
         if (!body)
@@ -466,14 +531,17 @@ static struct ast_node *parse_statement(void)
 
         // Either declaration, expression or empty
         struct ast_node *for_init = NULL;
-        if (match(TOKEN_INT)) {
-            for_init = parse_declaration();
+        if (is_declaration_specifier(parser_state.current.type)) {
+            for_init = parse_declaration(false);
+
             if (!for_init)
                 return NULL;
         } else if (!match(TOKEN_SEMICOLON)) {
             for_init = parse_expression(PREC_ASSIGNMENT);
+
             if (!for_init)
                 return NULL;
+
             consume(TOKEN_SEMICOLON, "Expected ';' after for-init");
         }
 
@@ -573,23 +641,21 @@ static struct ast_node *parse_statement(void)
     if (match(TOKEN_SEMICOLON))
         return AST_NEW(AST_NULL_STMT, parser_state.previous);
 
-    // If didn't match with any statement
-    // It's either an expression-statement or goto label
+    /*
+     * If didn't match with any statement
+     * It's either an expression-statement or goto label
+     */
     struct ast_node *expr = parse_expression(PREC_ASSIGNMENT);
     if (!expr)
         return NULL;
 
-    // We use AST_IDENTIFIER for goto labels
-    // We parsed an expression and if that expression is
-    // AST_IDENTIFIER with ':' it's a goto label
-    if (expr->type == AST_IDENTIFIER) {
-        if (match(TOKEN_COLON)) {
-            struct ast_node *stmt = parse_statement();
-            return AST_NEW(AST_LABEL_STMT, expr->token,
-                    .label_stmt.stmt = stmt,
-                    .label_stmt.name = expr->token
-            );
-        }
+    // Label
+    if (expr->type == AST_IDENTIFIER && match(TOKEN_COLON)) {
+        struct ast_node *stmt = parse_statement();
+        return AST_NEW(AST_LABEL_STMT, expr->token,
+                .label_stmt.stmt = stmt,
+                .label_stmt.name = expr->token
+        );
     }
 
     // Othwerwise expression statement
@@ -597,37 +663,20 @@ static struct ast_node *parse_statement(void)
     return AST_NEW(AST_EXPR_STMT, parser_state.previous, .expr_stmt.expr = expr);
 }
 
-static struct ast_node *parse_declarator(void)
-{
-    consume(TOKEN_IDENTIFIER, "Expected variable name");
-    struct token name = parser_state.previous;
-
-    struct ast_node *init = NULL;
-    if (match(TOKEN_EQUAL))
-        init = parse_expression(PREC_ASSIGNMENT);
-
-    return AST_NEW(AST_VAR_DECL, name, 
-            .var_decl.name = name,
-            .var_decl.init = init
-    );
-}
-
-static struct ast_node *parse_declaration(void)
-{
-    struct ast_node *declarator = parse_declarator();
-    consume(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
-    return declarator;
-}
-
 static struct ast_node *parse_block(void)
 {
     struct ast_node *block = AST_NEW(AST_BLOCK, parser_state.previous);
     struct ast_node *tail = NULL;
 
+    /*
+     * block-item:
+     *  declaration
+     *  statement
+     */
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         struct ast_node *item = NULL;
-        if (match(TOKEN_INT))
-            item = parse_declaration();
+        if (is_declaration_specifier(parser_state.current.type))
+            item = parse_declaration(false);
         else
             item = parse_statement();
 
@@ -647,63 +696,269 @@ static struct ast_node *parse_block(void)
     return block;
 }
 
-static struct ast_node *parse_function(void)
+static void set_storage_class(struct decl_specs *specs,
+                              enum storage_class storage,
+                              struct token *tok)
 {
-    struct token return_type = parser_state.previous;
-    consume(TOKEN_IDENTIFIER, "Expected function name");
-    struct token name_tok = parser_state.previous;
-    consume(TOKEN_LEFT_PAREN, "Expected '(' after function name");
+     // One storage class may be given in declaration
+     if (specs->storage) {
+         error(tok, "Multiple storage class identifiers");
+         return;
+     }
+     
+     specs->storage = storage;
+}
 
-    struct ast_node *params_head = NULL;
-    struct ast_node *params_tail = NULL;
+static struct decl_specs parse_declaration_specifiers(void)
+{
+    /*
+     * Either storage-class-specifier
+     * or type-specifier
+     */
+    struct decl_specs specs = {
+        .storage = SC_NONE,
+        .base_type = NULL
+    };
 
-    if (check(TOKEN_VOID)) {
-        advance();
-        if (!check(TOKEN_RIGHT_PAREN)) {
-            error(&parser_state.previous, "'void' must be the only parameter");
-            return NULL;
+    while (is_declaration_specifier(parser_state.current.type)) {
+        if (match(TOKEN_EXTERN)) {
+            set_storage_class(&specs, SC_EXTERN, &parser_state.previous);
         }
-    } else if (!check(TOKEN_RIGHT_PAREN)) {
-        do {
-            if (check(TOKEN_VOID)) {
-                error(&parser_state.previous, "'void' must be the only parameter");
-                return NULL;
-            }
-            consume(TOKEN_INT, "Expected parameter type.");
-            struct ast_node *param = parse_declarator();
-            if (!param)
-                return NULL;
-            LIST_APPEND(params_head, params_tail, param);
-        } while (match(TOKEN_COMMA));
+        else if (match(TOKEN_STATIC)) {
+            set_storage_class(&specs, SC_STATIC, &parser_state.previous);
+        } else if (match(TOKEN_VOID)) {
+            if (specs.base_type)
+                error(&parser_state.previous, "Duplicate type specifier");
+
+            specs.base_type = type_void();
+        } else if (match(TOKEN_INT)) {
+            if (specs.base_type)
+                error(&parser_state.previous, "Duplicate type specifier");
+
+            specs.base_type = type_int();
+        }
     }
 
-    consume(TOKEN_RIGHT_PAREN, "Expected ')' after function name");
+    if (!specs.base_type)
+        error(&parser_state.previous, "Type specifier missing");
 
-    struct ast_node *body = NULL;
-    if (match(TOKEN_LEFT_BRACE))
-        body = parse_block();
-    else
-        consume(TOKEN_SEMICOLON, "Expected '{' or ';' after function declaration");
+    return specs;
+}
 
-    return AST_NEW(AST_FUN_DECL, name_tok,
-        .fun_decl.name = name_tok,
-        .fun_decl.params = params_head,
+static struct param_list parse_paremeter_list_or_empty(void)
+{
+    struct param_list list = {0};
+
+    /*
+     * C23 mode:
+     *  int f() is treated as int f(void)
+     */
+    if (match(TOKEN_RIGHT_PAREN))
+        return list;
+
+    if (match(TOKEN_VOID)) {
+        if (!check(TOKEN_RIGHT_PAREN))
+            error(&parser_state.previous, "'void' be the first and only parameter");
+
+        return list;
+    }
+
+    do {
+        struct ast_node *param = parse_parameter_declaration();
+
+        if (!param)
+            break;
+
+        LIST_APPEND(list.head, list.tail, param);
+
+        list.types = realloc(list.types, sizeof(*list.types) * (list.count +1));
+        list.types[list.count++] = param->var_decl.type;
+    } while(match(TOKEN_COMMA));
+
+    return list;
+}
+
+static struct parsed_declarator parse_declarator(struct type *base_type)
+{
+    /*
+     * This now supports:
+     *  int x
+     *  int *p
+     *  int f()
+     *  int f(void)
+     *  int f(int x, int y)
+     *  int *f(void)
+     */
+    while (match(TOKEN_STAR))
+        base_type = type_pointer(base_type);
+
+    consume(TOKEN_IDENTIFIER, "Expected identifier");
+
+    struct parsed_declarator decl = {
+        .name = parser_state.previous,
+        .type = base_type,
+        .params = NULL
+    };
+
+    if (match(TOKEN_LEFT_PAREN)) {
+        struct param_list params = parse_paremeter_list_or_empty();
+
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after parameters list");
+
+        decl.type = type_function(
+                decl.type,
+                params.types,
+                params.count,
+                params.is_variadic
+        );
+
+        decl.params = params.head;
+    }
+
+    return decl;
+}
+
+static struct ast_node *parse_parameter_declaration(void)
+{
+    // declaration-specifier declarator
+
+    struct decl_specs specs = parse_declaration_specifiers();
+    struct parsed_declarator decl = parse_declarator(specs.base_type);
+
+    return AST_NEW(AST_VAR_DECL, decl.name,
+            .var_decl.name = decl.name,
+            .var_decl.type = decl.type,
+            .var_decl.storage = specs.storage,
+            .var_decl.init = NULL,
+            .var_decl.is_parameter = true,
+            .var_decl.is_definition = true,
+            .var_decl.is_tentative = false,
+            .var_decl.symbol = NULL
+    );
+}
+
+static struct ast_node *make_declaration_node(struct decl_specs specs,
+        struct parsed_declarator decl, struct ast_node *init, bool is_file_scope)
+{
+    if (decl.type->kind == TY_FUNCTION) {
+        if (init)
+            error(&decl.name, "Function declaration cannot have initializer");
+
+        return AST_NEW(AST_FUN_DECL, decl.name,
+                .fun_decl.name = decl.name,
+                .fun_decl.type = decl.type,
+                .fun_decl.storage = specs.storage,
+                .fun_decl.params = decl.params,
+                .fun_decl.body = NULL,
+                .fun_decl.is_definition = false,
+                .fun_decl.symbol = NULL
+        );
+    }
+
+    bool is_tentative = false;
+    bool is_definition = true;
+
+    if (is_file_scope && init == NULL) {
+        if (specs.storage == SC_EXTERN) {
+            is_definition = false;
+            is_tentative = false;
+        } else {
+            is_definition = false;
+            is_tentative = true;
+        }
+    }
+
+    return AST_NEW(AST_VAR_DECL, decl.name,
+            .var_decl.name = decl.name,
+            .var_decl.type = decl.type,
+            .var_decl.storage = specs.storage,
+            .var_decl.init = init,
+            .var_decl.is_definition = is_definition,
+            .var_decl.is_tentative = is_tentative,
+            .var_decl.symbol = NULL
+    );
+}
+
+static struct ast_node *parse_declaration(bool is_file_scope)
+{
+    // declaration-specifiers init-declarator-listopt;
+    struct decl_specs specs = parse_declaration_specifiers();
+    struct parsed_declarator decl = parse_declarator(specs.base_type);
+
+    struct ast_node *init = NULL;
+    if (match(TOKEN_EQUAL)) {
+        if (decl.type->kind == TY_FUNCTION)
+            error(&decl.name, "Function declaration cannot have initializer");
+
+        init = parse_expression(PREC_ASSIGNMENT);
+    }
+
+    consume(TOKEN_SEMICOLON, "Expected ';' after declaration");
+
+    return make_declaration_node(specs, decl, init, is_file_scope);
+}
+
+static struct ast_node *parse_function_definition(struct decl_specs specs,
+        struct parsed_declarator decl)
+{
+    if (decl.type->kind != TY_FUNCTION) {
+        error(&decl.name, "Function definition requires function declarator");
+        return NULL;
+    }
+
+    if (specs.storage != SC_NONE &&
+        specs.storage != SC_EXTERN &&
+        specs.storage != SC_STATIC) {
+        error(&decl.name, "Invalid storage class for function definition");
+    }
+
+    consume(TOKEN_LEFT_BRACE, "Expected function body");
+    struct ast_node *body = parse_block();
+
+    return AST_NEW(AST_FUN_DECL, decl.name,
+        .fun_decl.name = decl.name,
+        .fun_decl.type = decl.type,
+        .fun_decl.storage = specs.storage,
+        .fun_decl.params = decl.params,
         .fun_decl.body = body,
-        .fun_decl.return_type = return_type
+        .fun_decl.is_definition = true,
+        .fun_decl.symbol = NULL
     );
 }
 
 static struct ast_node *parse_external_declaration(void)
 {
-    if (match(TOKEN_INT))
-        return parse_function();
+    /*
+     * external-declaration:
+     *  function-definition
+     *  declaration
+     *
+     *  We parse declaration-specifiers + declarator first, the choose between
+     *  a function definition or a declaration
+     */
+    struct decl_specs specs = parse_declaration_specifiers();
+    struct parsed_declarator decl = parse_declarator(specs.base_type);
 
-    error(&parser_state.current, "Expected declaration");
-    return NULL;
+    if (decl.type->kind == TY_FUNCTION && check(TOKEN_LEFT_BRACE))
+        return parse_function_definition(specs, decl);
+
+    struct ast_node *init = NULL;
+
+    if (match(TOKEN_EQUAL)) {
+        if(decl.type->kind == TY_FUNCTION)
+            error(&decl.name, "Function declarator cannot have initializer");
+
+        init = parse_expression(PREC_ASSIGNMENT);
+    }
+
+    consume(TOKEN_SEMICOLON, "Expected ';' after external declaration");
+
+    return make_declaration_node(specs, decl, init, true);
 }
 
 struct ast_node *parse_translation_unit(const char *source)
 {
+    parser_state = (struct parser){0};
     lexer_init(source);
     advance();
 
