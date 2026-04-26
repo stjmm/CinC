@@ -16,7 +16,7 @@ struct parser {
 };
 
 typedef struct ast_node* (*prefix_parse_fn)(void);
-typedef struct ast_node* (*infix_parse_fn)(struct ast_node *);
+typedef struct ast_node* (*infix_parse_fn)(struct expr *);
 
 // C precedences
 enum precedence {
@@ -45,24 +45,16 @@ struct parse_rule {
 };
 
 struct decl_specs {
-    enum storage_class storage;
     struct type *base_type;
+    enum storage_class storage_class;
+    struct token storage_tok;
 };
 
-struct parsed_declarator {
+struct declarator {
     struct token name;
-    struct type *type;
+    struct type *ty;
     struct ast_node *params;
-};
-
-struct param_list {
-    struct ast_node *head;
-    struct ast_node *tail;
-
-    struct type **types;
-    size_t count;
-
-    bool is_variadic;
+    bool is_function;
 };
 
 static struct parser parser_state;
