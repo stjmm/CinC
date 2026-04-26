@@ -13,17 +13,10 @@
 #ifndef CINC_AST_H
 #define CINC_AST_H
 
+#include <stdlib.h>
 #include <stdbool.h>
 
 #include "lexer.h"
-#include "sema.h"
-
-// Allocates and initializes a new AST node (statement expression)
-#define AST_NEW(_type, tok, ...) ({                                               \
-    struct ast_node *_n = calloc(1, sizeof(struct ast_node));                     \
-    *_n = (struct ast_node){ .type = _type, .token = tok, .next = NULL, __VA_ARGS__ };\
-    _n;                                                                           \
-    })
 
 #define LIST_APPEND(head, tail, node)  \
     do {                               \
@@ -34,185 +27,275 @@
         (tail) = (node);               \
     } while(0)
 
-// X-macro
-#define AST_NODE_LIST   \
-    /* Expressions */   \
-    X(AST_CONSTANT)     \
-    X(AST_IDENTIFIER)   \
-    X(AST_UNARY)        \
-    X(AST_BINARY)       \
-    X(AST_PRE)          \
-    X(AST_POST)         \
-    X(AST_ASSIGNMENT)   \
-    X(AST_TERNARY)      \
-    X(AST_CALL)         \
-    /* Statements */    \
-    X(AST_EXPR_STMT)    \
-    X(AST_NULL_STMT)    \
-    X(AST_RETURN)       \
-    X(AST_IF_STMT)      \
-    X(AST_BLOCK)        \
-    X(AST_GOTO)         \
-    X(AST_LABEL_STMT)   \
-    X(AST_BREAK)        \
-    X(AST_CONTINUE)     \
-    X(AST_WHILE)        \
-    X(AST_DOWHILE)      \
-    X(AST_FOR)          \
-    X(AST_SWITCH)       \
-    X(AST_CASE)         \
-    X(AST_DEFAULT)      \
-    /* Declarations */  \
-    X(AST_VAR_DECL)     \
-    X(AST_FUN_DECL)     \
-    /* Top level */     \
-    X(AST_PROGRAM)      
 
-enum ast_type {
-#define X(ast_name) ast_name,
-    AST_NODE_LIST
-#undef X
+enum expr_kind {
+    EXPR_INT_LITERAL,
+    EXPR_IDENTIFIER,
+    EXPR_UNARY,
+    EXPR_BINARY,
+    EXPR_PRE,
+    EXPR_POST,
+    EXPR_ASSIGNMENT,
+    EXPR_CONDITIONAL,
+    EXPR_CALL
 };
 
-struct ast_node {
-    enum ast_type type;
-    struct token token;      // Primary token for this node
-    struct ast_node *next;   // Linked list: next node in block/program etc.
+struct expr {
+    enum expr_kind kind;
+    struct token tok;
+    struct expr *next; // Arguments list and other expression lists
 
-    /*
-     * For expressions defined by semantic analysis.
-     * For declarations: same as declared type
-     */
-    struct type *ctype;
+    struct type *ty;
+    bool is_lvalue;
 
     union {
+        long int_value;
+
         struct {
-            long value;
-        } constant;
-        struct {
-            struct symbol *symbol;
+            struct token name;
+            struct symbol *sym;
         } identifier;
+
         struct {
-            struct ast_node *expr;
+            struct token op;
+            struct expr *operand;
         } unary;
+
         struct {
-            struct ast_node *left;
-            struct ast_node *right;
+            struct token op;
+            struct expr *left;
+            struct expr *right;
         } binary;
+
         struct {
-            struct ast_node *lvalue;
-            struct ast_node *rvalue;
+            struct token op;
+            struct expr *lvalue;
+            struct expr *rvalue;
         } assignment;
+
         struct {
-            struct ast_node *condition;
-            struct ast_node *then;
-            struct ast_node *else_then;
-        } ternary;
+            struct expr *condition;
+            struct expr *then_expr;
+            struct expr *else_expr;
+        } conditional;
+
         struct {
-            struct ast_node *calle;
-            struct ast_node *args;
+            struct expr *calle;
+            struct expr *args;
         } call;
-
-        struct {
-            struct ast_node *expr;
-        } expr_stmt;
-        struct {
-            struct ast_node *expr;
-        } return_stmt;
-        struct {
-            struct ast_node *condition;
-            struct ast_node *then;
-            struct ast_node *else_then;
-        } if_stmt;
-        struct {
-            struct token label;
-        } goto_stmt;
-        struct {
-            struct token name;
-            struct ast_node *stmt; // Statement to which label points to
-        } label_stmt;
-        struct {
-            struct ast_node *condition;
-            struct ast_node *body;
-            const char *label; // Unique label for break/continue
-        } while_stmt;
-        struct {
-            struct ast_node *body;
-            struct ast_node *condition;
-            const char *label;
-        } do_while;
-        struct {
-            struct ast_node *for_init;  // Declaration or expression
-            struct ast_node *condition;
-            struct ast_node *post;
-            struct ast_node *body;
-            const char *label;
-        } for_stmt;
-        struct {
-            struct ast_node *value;
-            struct ast_node *first; // List of statements in this case
-            const char *label;      // Unique label for switch
-        } case_stmt;
-        struct {
-            struct ast_node *first;
-            const char *label;
-        } default_stmt;
-        struct {
-            struct ast_node *condition;
-            struct ast_node *body;
-            const char *label;
-            struct switch_annotation *annotation; // Filled by sema, used by IR
-        } switch_stmt;
-        struct {
-            const char *target_label;
-        } break_stmt;
-        struct {
-            const char *target_label;
-        } continue_stmt;
-        struct {
-            struct ast_node *first;
-        } block;
-
-        /*
-         * This is used for:
-         *  file-scope objects
-         *  block-scope objects
-         *  function parameters
-         */
-        struct {
-            struct token name;
-            struct type *type;
-            enum storage_class storage;
-            struct ast_node *init;
-
-            bool is_parameter;
-            bool is_definition;
-            bool is_tentative;
-
-            struct symbol *symbol;
-        } var_decl;
-
-        /*
-         * body == NULL means declaration/prototype
-         * body != NULL means function definition
-         */
-        struct {
-            struct token name;
-            struct type *type;
-            enum storage_class storage;
-
-            struct ast_node *params;
-            struct ast_node *body;
-
-            bool is_definition;
-
-            struct symbol *symbol;
-        } fun_decl;
-
-        struct { struct ast_node *first; } program;
     };
 };
 
-void ast_print(struct ast_node *node, int depth);
+enum stmt_kind {
+    STMT_NULL,
+    STMT_EXPR,
+    STMT_IF,
+    STMT_GOTO,
+    STMT_LABEL,
+    STMT_BREAK,
+    STMT_CONTINUE,
+    STMT_FOR,
+    STMT_WHILE,
+    STMT_DOWHILE,
+    STMT_SWITCH,
+    STMT_CASE,
+    STMT_DEFAULT,
+    STMT_RETURN,
+    STMT_BLOCK
+};
+
+struct for_init {
+    bool is_decl;
+    union {
+        struct expr *expr;
+        struct decl *decls;
+    };
+};
+
+struct stmt {
+    enum stmt_kind kind;
+    struct token tok;
+    struct stmt *next;
+
+    union {
+        struct {
+            struct expr *expr;
+        } expr_stmt;
+
+        struct {
+            struct expr *condition;
+            struct stmt *then_stmt;
+            struct stmt *else_stmt;
+        } if_stmt;
+
+        struct {
+            struct token label;
+        } goto_stmt;
+
+        struct {
+            struct token name;
+            struct stmt *stmt;
+        } label_stmt;
+
+        struct {
+            const char *target_label;
+        } break_stmt;
+
+        struct {
+            const char *target_label;
+        } continue_stmt;
+
+        struct {
+            struct for_init *init;
+            struct expr *condition;
+            struct expr *post;
+            struct stmt *body;
+            const char *break_label;
+            const char *continue_label;
+        } for_stmt;
+
+        struct {
+            struct expr *condition;
+            struct stmt *body;
+            const char *break_label;
+            const char *continue_label;
+        } while_stmt;
+
+        struct {
+            struct stmt *body;
+            struct expr *condition;
+            const char *break_label;
+            const char *continue_label;
+        } dowhile_stmt;
+
+        struct {
+            struct stmt *body;
+            struct expr *condition;
+            const char *break_label;
+            struct switch_annotation *annotation;
+        } switch_stmt;
+
+        struct {
+            struct expr *value;
+            struct stmt *stmt;
+            const char *label;
+        } case_stmt;
+
+        struct {
+            struct stmt *stmt;
+            const char *label;
+        } default_stmt;
+
+        struct {
+            struct expr *expr;
+        } return_stmt;
+
+        struct {
+            struct block_item *items;
+        } block;
+    };
+};
+
+enum decl_kind {
+    DECL_VAR,
+    DECL_FUNC
+};
+
+enum storage_class {
+    SC_NONE,
+    SC_EXTERN,
+    SC_STATIC,
+    SC_AUTO,
+    SC_REGISTER,
+    SC_TYPEDEF
+};
+
+enum linkage {
+    LINK_NONE,
+    LINK_INTERNAL,
+    LINK_EXTERNAL
+};
+
+enum storage_duration {
+    SD_NONE,
+    SD_AUTO,
+    SD_STATIC
+};
+
+struct decl {
+    enum decl_kind kind;
+    struct token name;
+    struct decl *next;
+
+    struct type *ty;
+
+    enum storage_class storage_class;
+    enum linkage linkage;
+    enum storage_duration storage_duration;
+
+    bool is_definition;
+    bool is_tentative;
+
+    struct symbol *sym;
+    const char *asm_name;
+
+    union {
+        struct {
+            struct expr *init;
+        } var;
+
+        struct {
+            struct decl *params;
+            struct stmt *body;
+        } func;
+    };
+};
+
+enum block_item_kind {
+    BLOCK_ITEM_STMT,
+    BLOCK_ITEM_DECL
+};
+
+struct block_item {
+    enum block_item_kind kind;
+
+    union {
+        struct stmt *stmt;
+        struct decl *decls;
+    };
+};
+
+struct ast_program {
+    struct decl *decls;
+};
+
+static inline struct expr *expr_new(enum expr_kind kind, struct token tok)
+{
+    struct expr *e = calloc(1, sizeof(struct expr));
+    e->kind = kind;
+    e->tok = tok;
+    return e;
+}
+
+static inline struct stmt *stmt_new(enum stmt_kind kind, struct token tok)
+{
+    struct stmt *s = calloc(1, sizeof(struct stmt));
+    s->kind = kind;
+    s->tok = tok;
+    return s;
+}
+
+static inline struct decl *decl_new(enum decl_kind kind, struct token tok)
+{
+    struct decl *d = calloc(1, sizeof(struct decl));
+    d->kind = kind;
+    d->name = tok;
+    d->storage_class = SC_NONE;
+    d->storage_duration = SD_NONE;
+    d->linkage = LINK_NONE;
+    return d;
+}
+
+void ast_print(struct ast_program *node, int depth);
 
 #endif
