@@ -258,6 +258,7 @@ enum block_item_kind {
 
 struct block_item {
     enum block_item_kind kind;
+    struct block_item *next;
 
     union {
         struct stmt *stmt;

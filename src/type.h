@@ -6,35 +6,31 @@
 enum type_kind {
     TY_VOID,
     TY_INT,
-    TY_POINTER,
     TY_FUNCTION
 };
 
 struct type {
     enum type_kind kind;
-    struct type *base; // TY_POINTER: pointee, TY_FUNCTION: return type.
-                       
-    /*
-     * Function parameters types.
-     *
-     * C11 note:
-     *      int f(void) declares a function with zero parameters
-     *      int f() declares a function with no prototype
-     *
-     * C11 6.7.6.3.
-     */
-    struct type **params;
-    int param_count;
-    bool is_variadic;
+
+    int size;
+    int align;
+
+    union {
+        struct {
+            struct type *return_type;
+            struct decl *params;
+            bool has_prototype;
+        } func;
+    };
 };
 
 struct type *type_void(void);
 struct type *type_int(void);
 struct type *type_pointer(struct type *base);
+struct type *type_function(struct type *return_type, struct decl *params, bool has_prototype);
 
-struct type *type_function(struct type *return_type, struct type **params,
-                            int param_count, bool is_variadic);
-
-bool type_equal(struct type *a, struct type *b);
+bool type_is_void(struct type *ty);
+bool type_is_int(struct type *ty);
+bool type_is_function(struct type *ty);
 
 #endif
