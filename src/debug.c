@@ -6,6 +6,47 @@
  * Prints AST S-Expression style
  */
 
+static void print_tok(struct token *tok)
+{
+    printf("%.*s", (int)tok->length, tok->start);
+}
+
+static void print_expr(struct expr *expr, int depth)
+{
+    if (!expr)
+        return;
+
+    switch (expr->kind) {
+        case EXPR_INT_LITERAL:
+            printf("%ld", expr->int_value);
+            break;
+        case EXPR_IDENTIFIER:
+            print_tok(&expr->identifier.name);
+            break;
+        case EXPR_PRE:
+        case EXPR_POST:
+        case EXPR_UNARY:
+            printf("(");
+            print_tok(&expr->unary.op);
+            printf(" ");
+            print_expr(expr->unary.operand, depth + 1);
+            printf(")");
+            break;
+        case EXPR_BINARY:
+            printf("(");
+    }
+}
+
+static void print_stmt(struct stmt *stmt)
+{
+
+}
+
+static void print_decl(struct decl *decl)
+{
+
+}
+
 static void print_expr(struct ast_node *node)
 {
     if (!node) return;

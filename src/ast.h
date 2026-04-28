@@ -1,15 +1,3 @@
-/*
- * AST node definitions for C.
- * Each node has its source token for error reporting.
- * Nodes are heap-allocated and linked via 'next' pointer
- * to form linked lists (block items, program, switch case bodies).
- *
- * Sema annotates nodes in-place:
- *  - token.resolved is set on identifier after variable_resolution
- *  - loop/switch labels are set after label_loops()
- *  - switch_stmt.annotation is set by annotate_switches()
- */
-
 #ifndef CINC_AST_H
 #define CINC_AST_H
 
@@ -17,6 +5,21 @@
 #include <stdbool.h>
 
 #include "lexer.h"
+
+/*
+ * AST is split into:
+ *   - struct program: translation unit
+ *   - struct decl:    object/function declaration
+ *   - stmt and expr
+ *
+ * Sema annotates:
+ *   - expr->ty
+ *   - expr->is_lvalue
+ *   - expr identifiers with expr->ident.sym
+ *   - decl->sym
+ *   - decl->ir_name
+ *   - break/continue/switch/case labels
+ */
 
 #define LIST_APPEND(head, tail, node)  \
     do {                               \
@@ -177,12 +180,12 @@ struct stmt {
 
         struct {
             struct expr *value;
-            struct stmt *stmt;
+            struct stmt *first;
             const char *label;
         } case_stmt;
 
         struct {
-            struct stmt *stmt;
+            struct stmt *first;
             const char *label;
         } default_stmt;
 
@@ -237,7 +240,8 @@ struct decl {
     bool is_tentative;
 
     struct symbol *sym;
-    const char *asm_name;
+    const char *ir_name;
+    int ir_name_len;
 
     union {
         struct {

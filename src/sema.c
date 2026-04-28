@@ -7,30 +7,45 @@
 #include "ast.h"
 #include "base/hash_map.h"
 
-struct symbol {
-    const char *name;
-    int length;
-    char *unique_name;
-};
-
 struct scope {
     struct scope *parent;
-    hash_map symbols;
+    hash_map ordinary;
 };
 
-struct loop_ctx {
+struct label_symbol {
+    struct token name;
+    struct stmt *stmt;
+};
+
+struct sema {
+    struct scope *global_scope;
+    struct scope *current_scope;
+
+    hash_map labels;
+
+    struct decl *current_function;
+
+    int unqiue_counter;
+    bool had_error;
+};
+
+struct switch_ctx {
+    struct stmt *switch_stmt;
+    struct switch_annotation *annotation;
+};
+
+struct control_ctx {
     const char *break_label;
     const char *continue_label;
+    struct switch_ctx *switch_ctx;
 };
 
-static hash_map labels;
-static int unique_counter = 0;
-static bool had_error = false;
+static struct sema sema_state;
 
 static struct scope *scope_push(struct scope *parent)
 {
     struct scope *s = calloc(1, sizeof(struct scope));
-    hashmap_init(&s->symbols);
+    hashmap_init(&s->ordinary);
     s->parent = parent;
     return s;
 }
@@ -38,21 +53,41 @@ static struct scope *scope_push(struct scope *parent)
 static struct scope *scope_pop(struct scope *s)
 {
     struct scope *parent = s->parent;
-    hashmap_free(&s->symbols);
+    hashmap_free(&s->ordinary);
     free(s);
     return parent;
+}
+
+static struct symbol *scope_resolve_current(struct scope *s, const char *name, int length)
+{
+    if (!s)
+        return NULL;
+
+    return hashmap_get(&s->ordinary, name, length);
 }
 
 // Walks all scopes from innermost to outermost looking for 'name'
 static struct symbol *scope_resolve(struct scope *s, const char *name, int length)
 {
     for (struct scope *scp = s; scp != NULL; scp = scp->parent) {
-        struct symbol *sym = hashmap_get(&scp->symbols, name, length);
+        struct symbol *sym = hashmap_get(&scp->ordinary, name, length);
         if (sym)
             return sym;
     }
 
     return NULL;
+}
+
+static struct symbol *symbol_new(struct token name, struct decl *decl)
+{
+    struct symbol *sym = calloc(1, sizeof(struct symbol));
+    sym->name = name;
+    sym->ns = NS_ORDINARY;
+    sym->decl = decl;
+    sym->linkage = decl->linkage;
+    sym->ir_name = decl->ir_name;
+    sym->ir_name_len = decl->ir_name_len;
+    return sym;
 }
 
 /* Declares a scope
@@ -566,24 +601,34 @@ static void resolve_switches(struct ast_node *node)
     }
 }
 
-static struct ast_node *resolve_function(struct ast_node *fn)
+static void resolve_function(struct decl *fn)
 {
-    hashmap_init(&labels);
+    if (!fn->func.body)
+        return NULL;
 
-    resolve_labels(fn->fun_decl.body);
-    resolve_block(fn->fun_decl.body, NULL);
-    resolve_break_continue(fn->fun_decl.body, NULL);
-    resolve_switches(fn->fun_decl.body);
+    sema_state.current_function = fn;
 
-    hashmap_free(&labels);
+    hashmap_init(&ctx->labels);
+    collect_labels(fn);
+
     return fn;
 }
 
-struct ast_node *sema_analysis(struct ast_node *program)
+struct ast_program *sema_analysis(struct ast_program *program)
 {
-    for (struct ast_node *fn = program->program.first; fn != NULL; fn = fn->next) {
-        resolve_function(fn);
+    sema_state = {0};
+
+    sema_state.global_scope = scope_push(NULL);
+    sema_state.current_scope = sema_state.global_scope;
+
+    for (struct decl *decl = program->decls, decl; decl = decl->next) {
+        sema_decl(decl, true);
+
+        if (decl->kind == DECL_FUNC && decl->is_definition)
+            sema_function_body(decl);
     }
 
-    return had_error ? NULL : program;
+    scope_pop(sema_state.global_scope);
+
+    return sema_state.had_error ? NULL : program;
 }

@@ -1,5 +1,6 @@
 #include <stdlib.h>
 
+#include "ast.h"
 #include "type.h"
 
 static struct type builtin_void = {
@@ -47,4 +48,43 @@ bool type_is_int(struct type *ty)
 bool type_is_function(struct type *ty)
 {
     return ty && ty->kind == TY_FUNCTION;
+}
+
+bool types_compatible(struct type *a, struct type *b)
+{
+    if (a == b)
+        return true;
+
+    if (!a || !b)
+        return false;
+
+    if (a->kind != b->kind)
+        return false;
+
+    switch (a->kind) {
+        case TY_VOID:
+        case TY_INT:
+            return true;
+
+        case TY_FUNCTION:
+            if (!types_compatible(a->func.return_type, b->func.return_type))
+                return false;
+
+            /*
+             * int f() is a non prototype declaration
+             * compatible with declarations with prototypes
+             */
+            if (!a->func.has_prototype || !b->func.has_prototype)
+                return true;
+
+            struct decl *pa = a->func.params;
+            struct decl *pb = b->func.params;
+            for (; pa && pb; pa = pa->next, pb = pb->next)
+                if (!types_compatible(pa->ty, pb->ty))
+                    return false;
+
+            return pa == NULL && pb == NULL;
+    }
+
+    return false;
 }

@@ -273,7 +273,7 @@ static struct expr *post(struct expr *left)
 
 static struct expr *ternary(struct expr *left)
 {
-    struct token tok = parser_state.previous; // ? tok
+    struct token tok = parser_state.previous;
     
     struct expr *then_expr = parse_expression(PREC_ASSIGNMENT);
     if (!then_expr)
@@ -294,6 +294,7 @@ static struct expr *ternary(struct expr *left)
 static struct expr *call(struct expr *left)
 {
     struct token tok = parser_state.previous;
+
     struct expr *args_head = NULL;
     struct expr *args_tail = NULL;
 
@@ -330,7 +331,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_QUESTION_MARK] = {NULL, ternary, PREC_TERNARY},
 
     [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
-    [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
+    [TOKEN_PLUS]          = {unary, binary, PREC_TERM},
     [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
     [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
     [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
@@ -371,6 +372,7 @@ static struct parse_rule parse_rules[] = {
 
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
     [TOKEN_VOID]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_STATIC]        = {NULL, NULL, PREC_NONE},
     [TOKEN_EXTERN]        = {NULL, NULL, PREC_NONE},
     [TOKEN_AUTO]          = {NULL, NULL, PREC_NONE},
     [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
@@ -470,7 +472,7 @@ static struct decl_specs parse_declaration_specs(void)
             continue;
         }
     }
-
+    
     if (!saw_any)
         error(&parser_state.current, "Expected declaration specifier");
 
@@ -656,7 +658,7 @@ static struct stmt *parse_statement(void)
         struct token tok = parser_state.previous;
         struct expr *expr = NULL;
 
-        if (!match(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
+        if (!check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
             expr = parse_expression(PREC_ASSIGNMENT);
             if (!expr)
                 return NULL;
@@ -723,20 +725,20 @@ static struct stmt *parse_statement(void)
             return NULL;
         consume(TOKEN_COLON, "Expected ':' after 'case'");
 
-        struct stmt *body_head = NULL;
-        struct stmt *body_tail = NULL;
+        struct stmt *stmts_head = NULL;
+        struct stmt *stmts_tail = NULL;
         while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
                 !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
             struct stmt *stmt = parse_statement();
             if (!stmt)
                 return NULL;
 
-            LIST_APPEND(body_head, body_tail, stmt);
+            LIST_APPEND(stmts_head, stmts_tail, stmt);
         }
 
         struct stmt *stmt = stmt_new(STMT_CASE, tok);
         stmt->case_stmt.value = value;
-        stmt->case_stmt.stmt = body_head;
+        stmt->case_stmt.first = stmts_head;
         return stmt;
     }
 
@@ -745,19 +747,19 @@ static struct stmt *parse_statement(void)
 
         consume(TOKEN_COLON, "Expected ':' after 'default'");
 
-        struct stmt *body_head = NULL;
-        struct stmt *body_tail = NULL;
+        struct stmt *stmts_head = NULL;
+        struct stmt *stmts_tail = NULL;
         while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
                 !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
             struct stmt *stmt = parse_statement();
             if (!stmt)
                 return NULL;
 
-            LIST_APPEND(body_head, body_tail, stmt);
+            LIST_APPEND(stmts_head, stmts_tail, stmt);
         }
 
-        struct stmt *stmt = stmt_new(STMT_CASE, tok);
-        stmt->default_stmt.stmt = body_head;
+        struct stmt *stmt = stmt_new(STMT_DEFAULT, tok);
+        stmt->default_stmt.first = stmts_head;
         return stmt;
     }
 
@@ -771,7 +773,7 @@ static struct stmt *parse_statement(void)
             init = for_init_from_decls(decls);
         } else if (!match(TOKEN_SEMICOLON)) {
             struct expr *expr = parse_expression(PREC_ASSIGNMENT);
-            if (!init)
+            if (!expr)
                 return NULL;
 
             consume(TOKEN_SEMICOLON, "Expected ';' after for-init");
@@ -900,6 +902,7 @@ static struct stmt *parse_statement(void)
     return stmt;
 }
 
+/* Parser a compound statement */
 static struct stmt *parse_block_after_lbrace(struct token lbrace_tok)
 {
     struct stmt *block = stmt_new(STMT_BLOCK, lbrace_tok);
@@ -907,6 +910,7 @@ static struct stmt *parse_block_after_lbrace(struct token lbrace_tok)
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
         struct block_item *item = NULL;
+
         if (is_declaration_specifier(parser_state.current.type)) {
             struct decl *decls = parse_declaration();
             item = block_item_from_decls(decls);
@@ -932,16 +936,18 @@ static struct stmt *parse_block_after_lbrace(struct token lbrace_tok)
     return block;
 }
 
+/*
+ * Parses external declaration or function definition.
+ * Returns a declaration node or list of declaration nodes.
+ *
+ * Examples:
+ *   int x;
+ *   int foo, bar;
+ *   static int = 3;
+ *   int foo(int bar) { return bar; }
+ */
 static struct decl *parse_external_declaration(void)
 {
-    /*
-     * external-declaration:
-     *  function-definition
-     *  declaration
-     *
-     *  We parse declaration-specifiers + declarator first, the choose between
-     *  a function definition or a declaration
-     */
     struct decl_specs specs = parse_declaration_specs();
     struct declarator d = parse_declarator(specs.base_type);
     struct decl *first = finish_decl_from_declarator(d, specs);
@@ -996,8 +1002,15 @@ struct ast_program *parse_translation_unit(const char *source)
             continue;
         }
 
-        for (struct decl *decl = decls; decl; decl = decl->next)
+        // A declaration might be 'int foo, bar' so we need append them all
+        for (struct decl *decl = decls; decl; ) {
+            struct decl *next = decl->next;
+            decl->next = NULL;
+
             LIST_APPEND(program->decls, tail, decl);
+
+            decl = next;
+        }
     }
 
     return parser_state.had_error ? NULL : program;

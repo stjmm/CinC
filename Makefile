@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -std=c11
+CFLAGS=-Wall -Wextra -std=c11 -pedantic
 
 BUILD=build
 EXE=$(BUILD)/cinc

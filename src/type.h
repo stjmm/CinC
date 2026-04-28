@@ -32,5 +32,6 @@ struct type *type_function(struct type *return_type, struct decl *params, bool h
 bool type_is_void(struct type *ty);
 bool type_is_int(struct type *ty);
 bool type_is_function(struct type *ty);
+bool types_compatible(struct type *a, struct type *b);
 
 #endif
