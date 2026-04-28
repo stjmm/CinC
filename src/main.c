@@ -109,7 +109,7 @@ static char *compile_one(stage stg, const char *src, const char *out_hint)
         exit(0);
     }
 
-    struct ast_node *root = parse_translation_unit(source);
+    struct ast_program *root = parse_translation_unit(source);
     if (!root)
         exit(1);
 
@@ -205,6 +205,7 @@ int main(int argc, char **argv)
         run(cmd);
     }
  
-    for (int i = 0; i < obj_count; i++) free(objs[i]);
+    for (int i = 0; i < obj_count; i++)
+        free(objs[i]);
     return 0;
 }

@@ -9,6 +9,6 @@
 
 #include "ast.h"
 
-struct ast_node *parse_translation_unit(const char *source);
+struct ast_program *parse_translation_unit(const char *source);
 
 #endif
