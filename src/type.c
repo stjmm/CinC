@@ -50,6 +50,11 @@ bool type_is_function(struct type *ty)
     return ty && ty->kind == TY_FUNCTION;
 }
 
+bool type_is_object(struct type *ty)
+{
+    return ty && ty->kind != TY_FUNCTION && ty->kind != TY_VOID;
+}
+
 bool types_compatible(struct type *a, struct type *b)
 {
     if (a == b)

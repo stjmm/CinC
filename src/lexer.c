@@ -192,7 +192,17 @@ static enum token_type identifier_type(void)
                     case 'w': return check_keyword(2, 4, "itch", TOKEN_SWITCH);
                 }
             break;
-        case 'r': return check_keyword(1, 5, "eturn", TOKEN_RETURN);
+        case 'r': 
+            if (lexer_state.current - lexer_state.start > 1)
+                switch (lexer_state.start[1]) {
+                    case 'e':
+                        if (lexer_state.current - lexer_state.start > 2)
+                            switch (lexer_state.start[2]) {
+                                case 't': return check_keyword(3, 3, "urn", TOKEN_RETURN);
+                                case 'g': return check_keyword(3, 5, "ister", TOKEN_REGISTER);
+                            }
+                }
+            break;
         case 'w': return check_keyword(1, 4, "hile", TOKEN_WHILE);
         case 'v': return check_keyword(1, 3, "oid", TOKEN_VOID);
     }
