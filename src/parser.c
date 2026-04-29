@@ -619,7 +619,7 @@ static struct stmt *parse_statement(void)
     if (match(TOKEN_CONTINUE)) {
         struct token tok = parser_state.previous;
         consume(TOKEN_SEMICOLON, "Expected ';' after 'continue'");
-        return stmt_new(STMT_BREAK, tok);
+        return stmt_new(STMT_CONTINUE, tok);
     }
 
     if (match(TOKEN_GOTO)) {
@@ -835,7 +835,7 @@ static struct block_item *parse_block_item(void)
         return NULL;
 
     struct block_item *item = block_item_new(BLOCK_ITEM_STMT, parser_state.current);
-    item->stmt = parse_statement();
+    item->stmt = stmt;
     return item;
 }
 
