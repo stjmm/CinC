@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 
@@ -293,4 +294,12 @@ struct token lexer_next_token()
     }
 
     return make_token(TOKEN_ERROR);
+}
+
+char *token_to_cstr(struct token tok)
+{
+    char *buf = malloc(tok.length + 1);
+    memcpy(buf, tok.start, tok.length);
+    buf[tok.length] = '\0';
+    return buf;
 }

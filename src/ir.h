@@ -1,7 +1,3 @@
-/*
- * Three-Address IR ("TACKY").
- */
-
 #ifndef CINC_IR_H
 #define CINC_IR_H
 
@@ -13,8 +9,10 @@ enum ir_val_type { IR_VAL_VAR, IR_VAL_CONSTANT };
 
 struct ir_val {
     enum ir_val_type type;
+
     union {
         long constant;
+
         struct {
             const char *name;
             int length;
@@ -24,7 +22,12 @@ struct ir_val {
 
 /* Instructions */
 
-enum ir_unary_op { IR_NEGATE, IR_COMPLEMENT, IR_NOT };
+enum ir_unary_op {
+    IR_NEGATE,
+    IR_COMPLEMENT,
+    IR_NOT
+};
+
 enum ir_binary_op {
     IR_ADD, 
     IR_SUBTRACT,
@@ -43,6 +46,7 @@ enum ir_binary_op {
     IR_GREATER,
     IR_GREATER_EQUAL,
 };
+
 enum ir_instr_type {
     IR_RETURN,
     IR_UNARY,
@@ -57,33 +61,47 @@ enum ir_instr_type {
 struct ir_instr {
     enum ir_instr_type type;
     struct ir_instr *next;
+
     union {
-        struct { struct ir_val src; } ret;
+        struct {
+            struct ir_val src;
+        } ret;
+
         struct {
             enum ir_unary_op op;
             struct ir_val src;
             struct ir_val dst;
         } unary;
+
         struct {
             enum ir_binary_op op;
             struct ir_val src1;
             struct ir_val src2;
             struct ir_val dst;
         } binary;
+
         struct {
             struct ir_val src;
             struct ir_val dst;
         } copy;
-        struct { int label_id; } jump;
+
+        struct {
+            int label_id;
+        } jump;
+
         struct {
             struct ir_val cond;
             int label_id;
         } jump_if_zero;
+
         struct {
             struct ir_val cond;
             int label_id;
         } jump_if_not_zero;
-        struct { int label_id; } label;
+
+        struct {
+            int label_id;
+        } label;
     };
 };
 
@@ -92,14 +110,14 @@ struct ir_instr {
 struct ir_function {
     const char *name;
     int name_length;
-    struct ir_instr *first; // Instruction list head
-    struct ir_instr *last;  // Kept for O(1) append
+    struct ir_instr *first;
+    struct ir_instr *last;
 };
 
 struct ir_program {
     struct ir_function *function;
 };
 
-struct ir_program *build_tacky(struct ast_node *root);
+struct ir_program *build_ir(struct ast_program *root);
 
 #endif

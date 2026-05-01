@@ -331,9 +331,12 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
     [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
     [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
+    
+    [TOKEN_AND_AND]       = {NULL, binary, PREC_AND},
+    [TOKEN_OR_OR]         = {NULL, binary, PREC_OR},
 
     [TOKEN_BANG]          = {unary, NULL, PREC_NONE},
-    [TOKEN_TILDE]         = {unary, NULL, PREC_UNARY},
+    [TOKEN_TILDE]         = {unary, NULL, PREC_NONE},
 
     [TOKEN_CARET]         = {NULL, binary, PREC_BITWISE_XOR},
     [TOKEN_OR]            = {NULL, binary, PREC_BITWISE_OR},
@@ -368,6 +371,7 @@ static struct parse_rule parse_rules[] = {
 
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
     [TOKEN_VOID]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_STATIC]        = {NULL, NULL, PREC_NONE},
     [TOKEN_EXTERN]        = {NULL, NULL, PREC_NONE},
     [TOKEN_AUTO]          = {NULL, NULL, PREC_NONE},
     [TOKEN_REGISTER]      = {NULL, NULL, PREC_NONE},
@@ -420,16 +424,23 @@ static struct decl *parse_declaration(void);
 
 static struct block_item *parse_case_default_items()
 {
+    // TODO: Add break stopping?
     struct block_item *head = NULL;
     struct block_item *tail = NULL;
 
-    // TODO: Maybe check if head is a declaration -> illegal
+    bool first = true;
     while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
             !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+        if (first && is_declaration_start(parser_state.current.type)) {
+            error(&parser_state.current, "Label followed by declaration");
+            return NULL;
+        }
+
         struct block_item *item = parse_block_item();
         if (!item)
             return NULL;
 
+        first = false;
         LIST_APPEND(head, tail, item);
     }
 
@@ -438,6 +449,14 @@ static struct block_item *parse_case_default_items()
 
 static struct stmt *parse_statement(void)
 {
+     /*
+     * TODO: Should this guard be here or in sema?
+     */
+    if (is_declaration_start(parser_state.current.type)) {
+        error(&parser_state.current, "Expected statement, not declaration");
+        return NULL;
+    }
+
     if (match(TOKEN_LEFT_BRACE))
         return parse_block_after_lbrace();
 
@@ -643,6 +662,9 @@ static struct stmt *parse_statement(void)
      * label (identifier: statement)
      */
     struct expr *expr = parse_expression(PREC_ASSIGNMENT);
+    if (!expr)
+        return NULL;
+
     if (expr->kind == EXPR_IDENTIFIER && match(TOKEN_COLON)) {
         struct stmt *labeled = parse_statement();
 
@@ -722,9 +744,6 @@ static struct decl *parse_parameter_declaration(void)
 
     d->is_parameter = true;
 
-    if (d->storage_class != SC_NONE && d->storage_class != SC_REGISTER)
-        error(&d->name, "Only 'register' storage class is allowed as paramater");
-
     return d;
 }
 
@@ -745,6 +764,7 @@ static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
         struct decl *params_head = NULL;
         struct decl *params_tail = NULL;
 
+        int param_count = 0;
         bool has_prototype = true;
 
         if (match(TOKEN_RIGHT_PAREN)) {
@@ -758,6 +778,7 @@ static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
                 if (!param)
                     return NULL;
 
+                param_count++;
                 LIST_APPEND(params_head, params_tail, param);
             } while (match(TOKEN_COMMA));
 
@@ -767,7 +788,7 @@ static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
         struct decl *d = decl_new(DECL_FUNCTION, name);
         d->storage_class = specs->storage_class;
         d->func.params = params_head;
-        d->ty = type_function(specs->base_type, params_head, has_prototype);
+        d->ty = type_function(specs->base_type, params_head, param_count, has_prototype);
         return d;
     }
 

@@ -175,7 +175,7 @@ static void link_files(const char **objects)
         strncat(cmd, objects[i], sizeof(cmd) - strlen(cmd) - 1);
     }
 
-    strncat(cmd, "-o", sizeof(cmd) - strlen(cmd) - 1);
+    strncat(cmd, " -o ", sizeof(cmd) - strlen(cmd) - 1);
     strncat(cmd, out, sizeof(cmd) - strlen(cmd) - 1);
 }
 

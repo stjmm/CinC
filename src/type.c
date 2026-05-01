@@ -25,12 +25,13 @@ struct type *type_int(void)
     return &builtin_int;
 }
 
-struct type *type_function(struct type *return_type, struct decl *params, bool has_prototype)
+struct type *type_function(struct type *return_type, struct decl *params, int param_count, bool has_prototype)
 {
     struct type *t = calloc(1, sizeof(struct type));
     t->kind = TY_FUNCTION;
     t->func.return_type = return_type;
     t->func.params = params;
+    t->func.param_count = param_count;
     t->func.has_prototype = has_prototype;
     return t;
 }
@@ -79,16 +80,23 @@ bool types_compatible(struct type *a, struct type *b)
              * int f() is a non prototype declaration
              * compatible with declarations with prototypes
              */
-            if (!a->func.has_prototype || !b->func.has_prototype)
-                return true;
-
-            struct decl *pa = a->func.params;
-            struct decl *pb = b->func.params;
-            for (; pa && pb; pa = pa->next, pb = pb->next)
-                if (!types_compatible(pa->ty, pb->ty))
+            if (!a->func.has_prototype || !b->func.has_prototype) {
+                if (a->func.param_count != b->func.param_count)
                     return false;
 
-            return pa == NULL && pb == NULL;
+                struct decl *pa = a->func.params;
+                struct decl *pb = b->func.params;
+                for (; pa && pb; pa = pa->next, pb = pb->next)
+                    if (!types_compatible(pa->ty, pb->ty))
+                        return false;
+
+                return pa == NULL && pb == NULL;
+            }
+
+            /* For now if one side has no protptype
+             * and the other does, accept.
+             */
+            return true;
     }
 
     return false;

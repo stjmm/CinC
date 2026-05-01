@@ -315,6 +315,6 @@ static inline struct block_item *block_item_new(enum block_item_kind kind, struc
     return i;
 }
 
-void ast_print(struct ast_program *node, int depth);
+void ast_print(struct ast_program *program);
 
 #endif
