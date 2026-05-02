@@ -424,10 +424,13 @@ static struct decl *parse_declaration(void);
 
 static struct block_item *parse_case_default_items()
 {
-    // TODO: Add break stopping?
     struct block_item *head = NULL;
     struct block_item *tail = NULL;
 
+    /*
+     * C11 doesn't allow decl after label, C23 does
+     * TODO: Maybe allow this
+     */
     bool first = true;
     while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
             !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {

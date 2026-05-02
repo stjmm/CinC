@@ -24,8 +24,8 @@ static struct decl *current_function;
 
 static hash_map labels;
 
-static int unique_counter = 0;
-static bool had_error = false;
+static int unique_counter;
+static bool had_error;
 
 static void error(struct token *tok, const char *message)
 {
@@ -281,7 +281,6 @@ static struct symbol *declare_symbol(struct decl *d)
 
     d->linkage = compute_linkage(d, prior_visible);
     d->storage_duration = compute_storage_duration(d);
-
     classify_definition(d);
 
     struct symbol *prior_current = scope_lookup_current(current_scope,
@@ -811,7 +810,7 @@ static void resolve_break_continue_stmt(struct stmt *stmt, struct loop_switch_ct
         }
 
         case STMT_SWITCH: {
-            char *b_label = make_unique("b.switch", 7);     
+            char *b_label = make_unique("b.switch", 8);     
             stmt->switch_stmt.break_label = b_label;
 
             struct loop_switch_ctx new_ctx = {
@@ -1138,6 +1137,7 @@ static void analyze_function_body(struct decl *fn)
 
 struct ast_program *sema_analysis(struct ast_program *program)
 {
+    unique_counter = 0;
     had_error = false;
     global_scope = scope_push(NULL);
     current_scope = global_scope;
