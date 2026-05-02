@@ -48,6 +48,7 @@ struct expr {
     struct token tok;
     struct expr *next; // Arguments list and other expression lists
 
+    // Filled by sema
     struct type *ty;
     bool is_lvalue;
 
@@ -83,9 +84,91 @@ struct expr {
         } conditional;
 
         struct {
-            struct expr *calle;
+            struct expr *callee;
             struct expr *args;
         } call;
+    };
+};
+
+enum decl_kind {
+    DECL_VAR,
+    DECL_FUNCTION
+};
+
+enum storage_class {
+    SC_NONE,
+    SC_EXTERN,
+    SC_STATIC,
+    SC_AUTO,
+    SC_REGISTER,
+};
+
+enum linkage {
+    LINK_NONE,
+    LINK_INTERNAL,
+    LINK_EXTERNAL
+};
+
+enum storage_duration {
+    SD_NONE,
+    SD_AUTO,
+    SD_STATIC,
+    SD_THREAD
+};
+
+struct decl {
+    enum decl_kind kind;
+    struct token name;
+    struct decl *next;
+
+    struct type *ty;
+
+    enum storage_class storage_class;        // parsed
+    enum linkage linkage;                    // sema-computed
+    enum storage_duration storage_duration;  // sema-computed
+
+    bool is_definition;
+    bool is_tentative;
+    bool is_parameter;
+
+    struct symbol *sym;
+    char *ir_name;
+
+    union {
+        struct {
+            struct expr *init;
+        } var;
+
+        struct {
+            struct decl *params;
+            struct stmt *body;
+        } func;
+    };
+};
+
+/* Statements / block-items */
+
+enum block_item_kind {
+    BLOCK_ITEM_STMT,
+    BLOCK_ITEM_DECL
+};
+
+struct block_item {
+    enum block_item_kind kind;
+    struct block_item *next;
+    struct token tok;
+
+    union {
+        struct stmt *stmt;
+        struct decl *decls;
+    };
+};
+
+struct for_init {
+    bool is_decl;
+    union {
+        struct expr *expr;
+        struct decl *decls;
     };
 };
 
@@ -105,14 +188,6 @@ enum stmt_kind {
     STMT_DEFAULT,
     STMT_RETURN,
     STMT_BLOCK
-};
-
-struct for_init {
-    bool is_decl;
-    union {
-        struct expr *expr;
-        struct decl *decls;
-    };
 };
 
 struct stmt {
@@ -180,12 +255,12 @@ struct stmt {
 
         struct {
             struct expr *value;
-            struct stmt *first;
+            struct block_item *items;
             const char *label;
         } case_stmt;
 
         struct {
-            struct stmt *first;
+            struct block_item *items;
             const char *label;
         } default_stmt;
 
@@ -199,76 +274,7 @@ struct stmt {
     };
 };
 
-enum decl_kind {
-    DECL_VAR,
-    DECL_FUNC
-};
-
-enum storage_class {
-    SC_NONE,
-    SC_EXTERN,
-    SC_STATIC,
-    SC_AUTO,
-    SC_REGISTER,
-    SC_TYPEDEF
-};
-
-enum linkage {
-    LINK_NONE,
-    LINK_INTERNAL,
-    LINK_EXTERNAL
-};
-
-enum storage_duration {
-    SD_NONE,
-    SD_AUTO,
-    SD_STATIC
-};
-
-struct decl {
-    enum decl_kind kind;
-    struct token name;
-    struct decl *next;
-
-    struct type *ty;
-
-    enum storage_class storage_class;
-    enum linkage linkage;
-    enum storage_duration storage_duration;
-
-    bool is_definition;
-    bool is_tentative;
-
-    struct symbol *sym;
-    const char *ir_name;
-    int ir_name_len;
-
-    union {
-        struct {
-            struct expr *init;
-        } var;
-
-        struct {
-            struct decl *params;
-            struct stmt *body;
-        } func;
-    };
-};
-
-enum block_item_kind {
-    BLOCK_ITEM_STMT,
-    BLOCK_ITEM_DECL
-};
-
-struct block_item {
-    enum block_item_kind kind;
-    struct block_item *next;
-
-    union {
-        struct stmt *stmt;
-        struct decl *decls;
-    };
-};
+/* Translation Unit */
 
 struct ast_program {
     struct decl *decls;
@@ -301,6 +307,14 @@ static inline struct decl *decl_new(enum decl_kind kind, struct token tok)
     return d;
 }
 
-void ast_print(struct ast_program *node, int depth);
+static inline struct block_item *block_item_new(enum block_item_kind kind, struct token tok)
+{
+    struct block_item *i = calloc(1, sizeof(struct block_item));
+    i->kind = kind;
+    i->tok = tok;
+    return i;
+}
+
+void ast_print(struct ast_program *program);
 
 #endif

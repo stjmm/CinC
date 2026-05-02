@@ -5,25 +5,27 @@
 
 #include "ast.h"
 
-enum symbol_namespace {
-    NS_ORDINARY,
+enum symbol_kind {
+    SYM_OBJECT,
+    SYM_FUNCTION
 };
 
 struct symbol {
-    struct token name;
-    enum symbol_namespace ns;
+    enum symbol_kind kind;
 
+    const char *name;
+    int name_len;
+
+    struct type *ty;
     struct decl *decl;
 
     enum linkage linkage;
+    enum storage_duration storage_duration;
 
-    const char *ir_name;
-    int ir_name_len;
+    bool defined;
+    bool tentative;
 
-    bool has_definiton;
-    struct decl *definiton;
-
-    struct decl *tentative_definition;
+    char *ir_name;
 };
 
 struct case_entry {

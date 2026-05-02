@@ -62,21 +62,22 @@
     /* Keywords */                \
     X(TOKEN_INT)                  \
     X(TOKEN_VOID)                 \
-    X(TOKEN_EXTERN)               \
     X(TOKEN_STATIC)               \
+    X(TOKEN_EXTERN)               \
     X(TOKEN_AUTO)                 \
+    X(TOKEN_REGISTER)             \
     X(TOKEN_RETURN)               \
     X(TOKEN_IF)                   \
     X(TOKEN_ELSE)                 \
-    X(TOKEN_GOTO)                 \
+    X(TOKEN_FOR)                  \
     X(TOKEN_WHILE)                \
     X(TOKEN_DO)                   \
-    X(TOKEN_FOR)                  \
     X(TOKEN_BREAK)                \
     X(TOKEN_CONTINUE)             \
     X(TOKEN_SWITCH)               \
     X(TOKEN_CASE)                 \
     X(TOKEN_DEFAULT)              \
+    X(TOKEN_GOTO)                 \
     /* Misc */                    \
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  
@@ -90,7 +91,7 @@ enum token_type {
 struct token {
     enum token_type type;
     const char *start;      // Pointer to original source string
-    size_t length;
+    int length;
 
     int line;
     const char *line_start; // Line start for current token 
@@ -98,5 +99,6 @@ struct token {
 
 void lexer_init(const char *source);
 struct token lexer_next_token(void);
+char *token_to_cstr(struct token tok);
 
 #endif
