@@ -38,10 +38,10 @@ static struct ir_value ir_name(const char *name)
 
 static struct ir_value make_temp(void)
 {
-    int len = snprintf(NULL, 0, "tmp.%d", next_temp_id++);
+    int len = snprintf(NULL, 0, "tmp.%d", next_temp_id);
     char *buf = malloc(len + 1);
 
-    snprintf(buf, len + 1, "tmp.%d", next_temp_id);
+    snprintf(buf, len + 1, "tmp.%d", next_temp_id++);
 
     return ir_name(buf);
 }
@@ -358,18 +358,27 @@ static struct ir_value emit_expr(struct expr *expr)
         case EXPR_POST: {
             bool is_incr = expr->tok.type == TOKEN_PLUS_PLUS;
 
-            struct ir_value lhs = ir_name(expr->unary.operand->identifier.sym->ir_name);
+            struct expr *lhs_expr = expr->unary.operand;
+            struct ir_value lhs = ir_name(lhs_expr->identifier.sym->ir_name);
 
-            // Save old for pre decr/incr
-            struct ir_value old_lhs;
             if (expr->kind == EXPR_POST) {
-                old_lhs = make_temp();
+                struct ir_value old_lhs = make_temp();
+
                 emit_copy(lhs, old_lhs);
+                emit_binary(is_incr ? IR_BINOP_ADD : IR_BINOP_SUB,
+                            lhs,
+                            ir_constant(1),
+                            lhs);
+
+                return old_lhs;
             }
 
-            emit_binary(is_incr ? IR_BINOP_ADD : IR_BINOP_SUB, lhs,
-                        ir_constant(1), lhs);
-            return expr->kind == EXPR_POST ? lhs : old_lhs;
+            emit_binary(is_incr ? IR_BINOP_ADD : IR_BINOP_SUB,
+                        lhs,
+                        ir_constant(1),
+                        lhs);
+
+            return lhs;
         }
 
         case EXPR_CONDITIONAL: {

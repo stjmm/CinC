@@ -20,7 +20,7 @@ static char *read_file(const char *filename)
 {
     FILE *file = fopen(filename, "r");
     if (!file) {
-        printf(stderr, "Opening file %s failed\n", filename);
+        fprintf(stderr, "Opening file %s failed\n", filename);
         exit(1);
     }
 
@@ -40,7 +40,7 @@ static void run_cmd(const char *cmd)
 {
     int status = system(cmd);
     if (status != 0) {
-        printf(stderr, "Command failed: %s\n");
+        fprintf(stderr, "Command failed: %s\n", cmd);
         exit(1);
     }
 }
@@ -84,7 +84,7 @@ static void parse_args(int argc, char **argv)
     if (argc < 2)
         usage(argv[0]);
 
-    for (int i = 0; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
         if (!strcmp(arg, "--help")) {
@@ -118,11 +118,11 @@ static void parse_args(int argc, char **argv)
     }
 }
 
-static char *compile_to_asm(const char *filename, const char *out_file)
+static void compile_to_asm(const char *filename, const char *out_file)
 {
-    const char *source = read_file(filename);
+    char *source = read_file(filename);
 
-    struct ast_program *root = parse_translation_unit(filename);
+    struct ast_program *root = parse_translation_unit(source);
     if (!root)
         exit(1);
 
@@ -130,12 +130,14 @@ static char *compile_to_asm(const char *filename, const char *out_file)
     if (!root)
         exit(1);
 
-    struct ir_program *program = build_tacky(root);
+    struct ir_program *program = build_ir(root);
     if (!program)
         exit(1);
 
-    emit_x86(program, out_file);
+    FILE *out_f = fopen(out_file, "w");
+    emit_x86(program, out_f);
 
+    fclose(out_f);
     free(source);
 }
 
@@ -149,7 +151,10 @@ static char *compile_file(const char *filename)
     }
 
     char *asm_file = replace_ext(filename, ".s");
-    char *obj_file = opt_o ? strdup(opt_o) : replace_ext(filename, ".o");
+
+    char *obj_file = (opt_c && opt_o)
+        ? strdup(opt_o)
+        : replace_ext(filename, ".o");
 
     compile_to_asm(filename, asm_file);
 
@@ -163,7 +168,7 @@ static char *compile_file(const char *filename)
     return obj_file;
 }
 
-static void link_files(const char **objects)
+static void link_files(char **objects)
 {
     const char *out = opt_o ? opt_o : "a.out";
 
@@ -177,6 +182,8 @@ static void link_files(const char **objects)
 
     strncat(cmd, " -o ", sizeof(cmd) - strlen(cmd) - 1);
     strncat(cmd, out, sizeof(cmd) - strlen(cmd) - 1);
+
+    run_cmd(cmd);
 }
 
 int main(int argc, char **argv)

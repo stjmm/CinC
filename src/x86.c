@@ -11,6 +11,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdbool.h>
 #include <stdarg.h>
 
@@ -25,8 +26,8 @@
 static enum asm_op convert_unop(enum ir_unary_op op)
 {
     switch (op) {
-        case IR_NEGATE:     return ASM_NEG;
-        case IR_COMPLEMENT: return ASM_NOT;
+        case IR_UNOP_NEG:     return ASM_NEG;
+        case IR_UNOP_BIT_NOT: return ASM_NOT;
         default:            return ASM_NEG; // Unreachable
     }
 }
@@ -34,14 +35,14 @@ static enum asm_op convert_unop(enum ir_unary_op op)
 static enum asm_op convert_binop(enum ir_binary_op op)
 {
     switch (op) {
-        case IR_ADD:         return ASM_ADD;
-        case IR_SUBTRACT:    return ASM_SUB;
-        case IR_MULTIPLY:    return ASM_IMUL;
-        case IR_AND:         return ASM_AND;
-        case IR_OR:          return ASM_OR;
-        case IR_XOR:         return ASM_XOR;
-        case IR_SHIFT_LEFT:  return ASM_SHL;
-        case IR_SHIFT_RIGHT: return ASM_SHR;
+        case IR_BINOP_ADD:     return ASM_ADD;
+        case IR_BINOP_SUB:     return ASM_SUB;
+        case IR_BINOP_MUL:     return ASM_IMUL;
+        case IR_BINOP_BIT_AND: return ASM_AND;
+        case IR_BINOP_BIT_OR:  return ASM_OR;
+        case IR_BINOP_BIT_XOR: return ASM_XOR;
+        case IR_BINOP_SHL:     return ASM_SHL;
+        case IR_BINOP_SHR:     return ASM_SHR;
         default:             return ASM_ADD; // Unreachable
     }
 }
@@ -49,12 +50,12 @@ static enum asm_op convert_binop(enum ir_binary_op op)
 static enum cond_code convert_to_cond(enum ir_binary_op op)
 {
     switch (op) {
-        case IR_EQUAL:         return COND_E;
-        case IR_NOT_EQUAL:     return COND_NE;
-        case IR_LESS:          return COND_L;
-        case IR_LESS_EQUAL:    return COND_LE;
-        case IR_GREATER:       return COND_G;
-        case IR_GREATER_EQUAL: return COND_GE;
+        case IR_BINOP_EQ: return COND_E;
+        case IR_BINOP_NE: return COND_NE;
+        case IR_BINOP_LT: return COND_L;
+        case IR_BINOP_LE: return COND_LE;
+        case IR_BINOP_GT: return COND_G;
+        case IR_BINOP_GE: return COND_GE;
         default:               return COND_E; // Unreachable
     }
 }
@@ -150,15 +151,15 @@ static struct asm_instr *make_ret(void)   { return alloc_instr(ASM_RET); }
 static struct asm_instr *make_cdq(void)   { return alloc_instr(ASM_CDQ); }
 
 // Convert 'ir_val' to ASM operand (immediate or pseudo)
-static struct operand convert_val(struct ir_val v)
+static struct operand convert_val(struct ir_value v)
 {
-    if (v.type == IR_VAL_CONSTANT) {
+    if (v.kind == IR_VALUE_CONSTANT) {
         return make_imm(v.constant);
     } else {
         return (struct operand){
             .type = OPERAND_PSEUDO,
-            .pseudo.name = v.var.name,
-            .pseudo.length = v.var.length
+            .pseudo.name = v.name,
+            .pseudo.length = (int)strlen(v.name)
         };
     }
 }
@@ -192,8 +193,8 @@ static struct asm_instr *replace_instr(struct asm_function *fn,
 
 static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
 {
-    switch (instr->type) {
-        case IR_RETURN: {
+    switch (instr->kind) {
+        case IR_INSTR_RETURN: {
             // return val -> movl val, %eax
             struct operand src = convert_val(instr->ret.src);
 
@@ -201,11 +202,11 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             append_instr(fn, make_ret());
             break;
         }
-        case IR_UNARY: {
+        case IR_INSTR_UNARY: {
             struct operand src = convert_val(instr->unary.src);
             struct operand dst = convert_val(instr->unary.dst);
 
-            if (instr->unary.op == IR_NOT) {
+            if (instr->unary.op == IR_UNOP_LOG_NOT) {
                 /*
                 * Logical NOT: compare src to zero, set dst to the zero flag
                 * cmpl $0, src
@@ -225,13 +226,13 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             append_instr(fn, make_unary(convert_unop(instr->unary.op), dst));
             break;
         }
-        case IR_BINARY: {
-            struct operand src1 = convert_val(instr->binary.src1);
-            struct operand src2 = convert_val(instr->binary.src2);
+        case IR_INSTR_BINARY: {
+            struct operand src1 = convert_val(instr->binary.lhs);
+            struct operand src2 = convert_val(instr->binary.rhs);
             struct operand dst = convert_val(instr->binary.dst);
             enum ir_binary_op op = instr->binary.op;
 
-            if (op == IR_DIVIDE || op == IR_REMAINDER) {
+            if (op == IR_BINOP_DIV || op == IR_BINOP_REM) {
                 /*
                  * Signed division: x86 IDIV divides EDX:EAX by the operand
                  * movl src1, %eax
@@ -242,11 +243,12 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_mov(src1, make_reg(REG_AX)));
                 append_instr(fn, make_cdq());
                 append_instr(fn, make_idiv(src2));
-                append_instr(fn, make_mov(make_reg(op == IR_DIVIDE ? REG_AX : REG_DX), dst));
+                append_instr(fn, make_mov(make_reg(op == IR_BINOP_DIV ? REG_AX : REG_DX), dst));
                 break;
-            } else if (op == IR_EQUAL || op == IR_NOT_EQUAL ||
-                op == IR_LESS || op == IR_LESS_EQUAL ||
-                op == IR_GREATER || op == IR_GREATER_EQUAL) {
+            }
+            if (op == IR_BINOP_EQ || op == IR_BINOP_NE ||
+                op == IR_BINOP_LT || op == IR_BINOP_LE ||
+                op == IR_BINOP_GT || op == IR_BINOP_GE) {
                 /*
                  * Compare, zero dest, then set
                  * cmpl src2, src1
@@ -257,7 +259,11 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_mov(make_imm(0), dst));
                 append_instr(fn, make_setcc(convert_to_cond(op), dst));
                 break;
-            } else if (op == IR_AND || op == IR_OR || op == IR_XOR) {
+            }
+
+            if (op == IR_BINOP_BIT_AND ||
+                op == IR_BINOP_BIT_OR ||
+                op == IR_BINOP_BIT_XOR) {
                 /*
                  * Bitwise ops route through %eax
                  * movl src1, %eax
@@ -270,7 +276,9 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_binary(convert_binop(op), src2, ax));
                 append_instr(fn, make_mov(ax, dst));
                 break;
-            } else if (instr->binary.op == IR_SHIFT_LEFT || instr->binary.op == IR_SHIFT_RIGHT) {
+            } 
+
+            if (op == IR_BINOP_SHL || op == IR_BINOP_SHR) {
                 // Shifts: count must be immediate or %cx
                 struct operand ax = make_reg(REG_AX);
                 struct operand count;
@@ -296,7 +304,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             append_instr(fn, make_binary(convert_binop(op), src2, dst));
             break;
         }
-        case IR_JUMP_IF_ZERO: {
+        case IR_INSTR_JUMP_IF_ZERO: {
             // if (!cond) goto label -> cmpl $0, val, je
             struct operand val = convert_val(instr->jump_if_zero.cond);
 
@@ -304,7 +312,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             append_instr(fn, make_jmpcc(COND_E, instr->jump_if_zero.label_id));
             break;
         }
-        case IR_JUMP_IF_NOT_ZERO: {
+        case IR_INSTR_JUMP_IF_NOT_ZERO: {
             // if (cond) goto label -> cmpl $0, val, jne
             struct operand val = convert_val(instr->jump_if_not_zero.cond);
 
@@ -312,18 +320,18 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
             append_instr(fn, make_jmpcc(COND_NE, instr->jump_if_not_zero.label_id));
             break;
         }
-        case IR_JUMP: {
+        case IR_INSTR_JUMP: {
             append_instr(fn, make_jmp(instr->jump.label_id));
             break;
         }
-        case IR_COPY: {
+        case IR_INSTR_COPY: {
             struct operand src = convert_val(instr->copy.src);
             struct operand dst = convert_val(instr->copy.dst);
 
             append_instr(fn, make_mov(src, dst));
             break;
         }
-        case IR_LABEL: {
+        case IR_INSTR_LABEL: {
             append_instr(fn, make_label(instr->label.label_id));
             break;
         }
@@ -334,7 +342,7 @@ static struct asm_function *emit_function(struct ir_function *fn)
 {
     struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
     asm_fn->name = fn->name;
-    asm_fn->name_length = fn->name_length;
+    asm_fn->name_length = (int)strlen(fn->name);
 
     for (struct ir_instr *i = fn->first; i != NULL; i = i->next) {
         emit_instr(asm_fn, i);
@@ -346,7 +354,7 @@ static struct asm_function *emit_function(struct ir_function *fn)
 static struct asm_program *asm_phase1(struct ir_program *ir)
 {
     struct asm_program *program = calloc(1, sizeof(struct asm_program));
-    program->function = emit_function(ir->function);
+    program->function = emit_function(ir->functions);
     return program;
 }
 
