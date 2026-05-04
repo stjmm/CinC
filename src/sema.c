@@ -24,6 +24,9 @@ static struct decl *current_function;
 
 static hash_map labels;
 
+static hash_map external_symbols;
+static hash_map internal_symbols;
+
 static int unique_counter;
 static bool had_error;
 
@@ -120,62 +123,61 @@ static struct symbol *symbol_new(struct decl *d)
     return sym;
 }
 
+static bool has_linkage(struct symbol *sym)
+{
+    if (sym->linkage == LINK_EXTERNAL ||
+        sym->linkage == LINK_INTERNAL)
+        return true;
+
+    return false;
+}
+
+static enum linkage compute_extern_linkage(struct symbol *prior_visible)
+{
+    // Extern inherits a visible prior linkage
+    if (prior_visible && has_linkage(prior_visible)) {
+        return prior_visible->linkage;
+    }
+
+    return LINK_EXTERNAL;
+}
+
 static enum linkage compute_linkage(struct decl *d, struct symbol *prior_visible)
 {
+    // Parameters have no linkage
     if (d->is_parameter)
         return LINK_NONE;
 
+    /*
+     * At file-scope
+     *   static int(void); -> internal linkage
+     *   extern int x;     -> external linkage
+     *   int x;            -> external
+     */
     if (d->kind == DECL_FUNCTION) {
-        // No storage-class -> external linkage
         if (d->storage_class == SC_STATIC)
             return LINK_INTERNAL;
 
-        /*
-         * Function declarations with no storage-class behave as extern.
-         * Therefore they inherit visible internal/external linkage.
-         */
-        if (prior_visible && (prior_visible->linkage == LINK_INTERNAL ||
-            prior_visible->linkage == LINK_EXTERNAL)) {
-            return prior_visible->linkage;
-        }
-
-        return LINK_EXTERNAL;
+        return compute_extern_linkage(prior_visible);
     }
 
     if (is_file_scope()) {
         if (d->storage_class == SC_STATIC)
             return LINK_INTERNAL;
+        
+        if (d->storage_class == SC_EXTERN)
+            return compute_extern_linkage(prior_visible);
 
-        /*
-         * File scope extern inherits visible prior
-         * internal/external linkage, otherwise external
-         */
-        if (d->storage_class == SC_EXTERN) {
-            if (prior_visible &&
-                (prior_visible->linkage == LINK_INTERNAL ||
-                prior_visible->linkage == LINK_EXTERNAL)) {
-                return prior_visible->linkage;
-            }
-
+        if (d->storage_class == SC_NONE)
             return LINK_EXTERNAL;
-        }
 
-        return LINK_EXTERNAL;
+        // Invalid at file scope, validate_decl should already error report
+        return LINK_NONE;
     }
 
-    /*
-     * Block-scope extern object declaration may refer to an existing linked
-     * declaration. Otherwise it declares an external object.
-     */
-    if (d->storage_class == SC_EXTERN) {
-        if (prior_visible &&
-            (prior_visible->linkage == LINK_INTERNAL ||
-             prior_visible->linkage == LINK_EXTERNAL)) {
-            return prior_visible->linkage;
-        }
-
-        return LINK_EXTERNAL;
-    }
+    // Block scope
+    if (d->storage_class == SC_EXTERN)
+        return compute_extern_linkage(prior_visible);
 
     return LINK_NONE;
 }
@@ -185,15 +187,14 @@ static enum storage_duration compute_storage_duration(struct decl *d)
     if (d->kind == DECL_FUNCTION)
         return SD_STATIC;
 
-    if (d->is_parameter)
-        return SD_AUTO;
-
-    if (d->storage_class == SC_STATIC)
+    // File scope objects have static duration
+    if (is_file_scope())
         return SD_STATIC;
 
-    if (d->linkage == LINK_INTERNAL || d->linkage == LINK_EXTERNAL)
+    if (d->storage_class == SC_STATIC || d->storage_class == SC_EXTERN)
         return SD_STATIC;
 
+    // Normal block scope objects and parameters
     return SD_AUTO;
 }
 
@@ -202,32 +203,59 @@ static void classify_definition(struct decl *d)
     d->is_definition = false;
     d->is_tentative = false;
 
+    /*
+     * Function:
+     *   int foo(void);   declaration
+     *   int foo(void) {} definition
+     */
     if (d->kind == DECL_FUNCTION) {
-        if (d->func.body)
-            d->is_definition = true;
-
-        return;
-    }
-
-    if (!is_file_scope()) {
-        if (d->storage_class != SC_EXTERN)
-            d->is_definition = true;
-
+        d->is_definition = d->func.body != NULL;
         return;
     }
 
     /*
-     * C11 6.9.2:
+     * File scope objects:
+     *   int x = 1; definition
+     *   extern int x = 1; definition
+     *   static int x = 1; definition
      *
-     * File-scope object with initializer is an external definition.
-     * File-scope object without initializer and no storage class or static
-     * is a tentative definition.
+     *   int x;        tentative
+     *   static int x; tentative
+     *
+     *   extern int x; declaration
      */
-    if (d->var.init) {
+    if (is_file_scope()) {
+        if (d->var.init) {
+            d->is_definition = true;
+            return;
+        }
+
+        if (d->storage_class == SC_NONE ||
+            d->storage_class == SC_STATIC) {
+            d->is_tentative = true;
+            return;
+        }
+
+        return;
+    }
+
+    // Block scope object: declaration only if extern
+    if (d->storage_class != SC_EXTERN)
         d->is_definition = true;
-    } else if (d->storage_class == SC_NONE ||
-               d->storage_class == SC_STATIC) {
-        d->is_tentative = true;
+}
+
+static void validate_for_init_decls(struct decl *decls)
+{
+    for (struct decl *d = decls; d; d = d->next) {
+        if (d->kind != DECL_VAR) {
+            error(&d->name, "For-loop init declaration must declare an object");
+            continue;
+        }
+
+        if (d->storage_class != SC_NONE &&
+            d->storage_class != SC_AUTO &&
+            d->storage_class != SC_REGISTER)
+            error(&d->name, "Illegal storage class for for-init");
     }
 }
 
@@ -271,7 +299,38 @@ static void validate_decl(struct decl *d)
         error(&d->name, "Object cannot have type void");
 
     if (!is_file_scope() && d->storage_class == SC_EXTERN && d->var.init)
-        error(&d->name, "Block-scope extern cannot have an initializer");
+        error(&d->name, "Declaration of block-scope identifier with external linkage"
+                        "cannot have an initializer");
+}
+
+static struct symbol *merge_symbol(struct decl *d, struct symbol *sym,
+                                    bool install_in_current_scope)
+{
+    if (d->linkage != sym->linkage)
+        error(&d->name, "Conflicting linkage for declaration");
+
+    if (!types_compatible(d->ty, sym->ty)) {
+        error(&d->name, "Confilcting declaration types");
+    } else {
+        // Composite type
+    }
+
+    if (sym->defined && d->is_definition)
+        error(&d->name, "Redeclaration");
+    
+    sym->defined |= d->is_definition;
+    sym->tentative |= d->is_tentative;
+
+    d->sym = sym;
+    d->ir_name = sym->ir_name;
+
+    if (install_in_current_scope)
+        hashmap_set(&current_scope->ordinary,
+                    d->name.start,
+                    d->name.length,
+                    sym);
+
+    return sym;
 }
 
 static struct symbol *declare_symbol(struct decl *d)
@@ -286,6 +345,7 @@ static struct symbol *declare_symbol(struct decl *d)
     struct symbol *prior_current = scope_lookup_current(current_scope,
             d->name.start, d->name.length);
 
+    // Same scope declaration
     if (prior_current) {
         if (d->linkage == LINK_NONE || prior_current->linkage == LINK_NONE) {
             error(&d->name, "Duplicate declaration");
@@ -294,65 +354,83 @@ static struct symbol *declare_symbol(struct decl *d)
             return prior_current;
         }
 
-        if (d->linkage != prior_current->linkage) {
-            error(&d->name, "Conflicting linkage for declaration");
-            d->sym = prior_current;
-            d->ir_name = prior_current->ir_name;
-            return prior_current;
-        }
+        return merge_symbol(d, prior_current, false);
+    }
 
-        if (!types_compatible(d->ty, prior_current->ty)) {
-            error(&d->name, "Conflicting declaration types");
-            d->sym = prior_current;
-            d->ir_name = prior_current->ir_name;
-            return prior_current;
-        }
-
-        if (prior_current->defined && d->is_definition) {
-            error(&d->name, "Redefinition");
-            d->sym = prior_current;
-            d->ir_name = prior_current->ir_name;
-            return prior_current;
-        }
-
-        prior_current->defined |= d->is_definition;
-        prior_current->tentative |= d->is_tentative;
-
-        d->sym = prior_current;
-        d->ir_name = prior_current->ir_name;
-
-        return prior_current;
+    /* Visible linked declaration
+     *
+     * Example:
+     *   int x;
+     *   int foo(void) {
+     *      extern int x;
+     *   }
+     */
+    if (prior_visible && has_linkage(prior_visible) &&
+        d->linkage == prior_visible->linkage) {
+        return merge_symbol(d, prior_visible, true);
     }
 
     /*
-     * Block-scope extern can introduce a local declaration that refers to
-     * an already-visible linked symbol.
+     * External linkage in unreleated scope
+     * 
+     * Example:
+     *   int main(void) {
+     *      int foo(int);
+     *   }
+     *   int bar(void) {
+     *      int foo(int, int); 
+     *   }
      */
-    if (d->storage_class == SC_EXTERN &&
-        prior_visible &&
-        prior_visible->linkage != LINK_NONE) {
-        if (!types_compatible(prior_visible->ty, d->ty))
-            error(&d->name, "Conflicting extern declaration type");
+    if (d->linkage == LINK_EXTERNAL) {
+        struct symbol *prior_external =
+            hashmap_get(&external_symbols, d->name.start, d->name.length);
 
-        hashmap_set(&current_scope->ordinary,
-                    d->name.start,
-                    d->name.length,
-                    prior_visible);
-
-        d->sym = prior_visible;
-        d->ir_name = prior_visible->ir_name;
-
-        return prior_visible;
+        if (prior_external)
+            return merge_symbol(d, prior_external, true);
     }
 
+    // Internal/external linkage confict in same translation unit
+    if (d->linkage == LINK_EXTERNAL) {
+        struct symbol *prior_internal =
+            hashmap_get(&internal_symbols, d->name.start, d->name.length);
+
+        if (prior_internal)
+            error(&d->name, "Identifier previously declared with internal linkage");
+    }
+
+    if (d->linkage == LINK_INTERNAL) {
+        struct symbol *prior_external =
+            hashmap_get(&external_symbols, d->name.start, d->name.length);
+
+        if (prior_external)
+            error(&d->name, "Identifier previously declared with external linkage");
+    }
+
+    /*
+     * New symbol
+     */
     struct symbol *sym = symbol_new(d);
 
-    hashmap_set(&current_scope->ordinary, d->name.start,
-                d->name.length, sym);
+    hashmap_set(&current_scope->ordinary,
+                d->name.start,
+                d->name.length,
+                sym);
+
+    if (d->linkage == LINK_EXTERNAL) {
+        hashmap_set(&external_symbols,
+                    d->name.start,
+                    d->name.length,
+                    sym);
+    } else if (d->linkage == LINK_INTERNAL) {
+        hashmap_set(&internal_symbols,
+                    d->name.start,
+                    d->name.length,
+                    sym);
+    }
 
     d->sym = sym;
     d->ir_name = sym->ir_name;
-    
+
     return sym;
 }
 
@@ -490,6 +568,12 @@ static void analyze_expr(struct expr *expr)
     }
 }
 
+static void require_int_expression(struct expr *expr, const char *message)
+{
+    if (!type_is_int(expr->ty))
+        error(&expr->tok, message);
+}
+
 static void analyze_stmt(struct stmt *stmt);
 
 static void analyze_decl_list(struct decl *decls)
@@ -575,13 +659,17 @@ static void analyze_stmt(struct stmt *stmt)
             current_scope = scope_push(current_scope);
 
             if (stmt->for_stmt.init) {
-                if (stmt->for_stmt.init->is_decl)
+                if (stmt->for_stmt.init->is_decl) {
+                    validate_for_init_decls(stmt->for_stmt.init->decls);
                     analyze_decl_list(stmt->for_stmt.init->decls);
-                else
+                } else {
                     analyze_expr(stmt->for_stmt.init->expr);
+                }
             }
 
             analyze_expr(stmt->for_stmt.condition);
+            require_int_expression(stmt->for_stmt.condition,
+                                    "For condition must have type int");
             analyze_expr(stmt->for_stmt.post);
             analyze_stmt(stmt->for_stmt.body);
 
@@ -592,21 +680,29 @@ static void analyze_stmt(struct stmt *stmt)
 
         case STMT_WHILE:
             analyze_expr(stmt->while_stmt.condition);
+            require_int_expression(stmt->while_stmt.condition,
+                                    "While condition must have type int");
             analyze_stmt(stmt->while_stmt.body);
             break;
 
         case STMT_DOWHILE:
             analyze_stmt(stmt->dowhile_stmt.body);
             analyze_expr(stmt->dowhile_stmt.condition);
+            require_int_expression(stmt->dowhile_stmt.condition,
+                                    "Do-while condition must have type int");
             break;
 
         case STMT_SWITCH:
             analyze_expr(stmt->switch_stmt.condition);
+            require_int_expression(stmt->switch_stmt.condition,
+                                    "Switch condition must have type int");
             analyze_stmt(stmt->switch_stmt.body);
             break;
 
         case STMT_CASE:
             analyze_expr(stmt->case_stmt.value);
+            require_int_expression(stmt->case_stmt.value,
+                                    "Case value must have type int");
             analyze_block(stmt->case_stmt.items, false);
             break;
 
@@ -1139,6 +1235,10 @@ struct ast_program *sema_analysis(struct ast_program *program)
 {
     unique_counter = 0;
     had_error = false;
+
+    hashmap_init(&internal_symbols);
+    hashmap_init(&external_symbols);
+
     global_scope = scope_push(NULL);
     current_scope = global_scope;
     current_function = NULL;
@@ -1156,6 +1256,9 @@ struct ast_program *sema_analysis(struct ast_program *program)
         if (d->kind == DECL_FUNCTION && d->func.body)
             analyze_function_body(d);
     }
+
+    hashmap_free(&internal_symbols);
+    hashmap_free(&external_symbols);
     
     return had_error ? NULL : program;
 }

@@ -246,6 +246,7 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
                 append_instr(fn, make_mov(make_reg(op == IR_BINOP_DIV ? REG_AX : REG_DX), dst));
                 break;
             }
+
             if (op == IR_BINOP_EQ || op == IR_BINOP_NE ||
                 op == IR_BINOP_LT || op == IR_BINOP_LE ||
                 op == IR_BINOP_GT || op == IR_BINOP_GE) {
@@ -354,7 +355,7 @@ static struct asm_function *emit_function(struct ir_function *fn)
 static struct asm_program *asm_phase1(struct ir_program *ir)
 {
     struct asm_program *program = calloc(1, sizeof(struct asm_program));
-    program->function = emit_function(ir->functions);
+    program->functions = emit_function(ir->functions);
     return program;
 }
 
@@ -406,7 +407,7 @@ static int asm_phase2(struct asm_program *program)
     struct pseudo_map pm = {0};
     hashmap_init(&pm.entries);
 
-    struct asm_function *fn = program->function;
+    struct asm_function *fn = program->functions;
     for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {
         switch (instr->type) {
             case ASM_MOV:
@@ -452,7 +453,7 @@ static int asm_phase2(struct asm_program *program)
  */
 static void asm_phase3(struct asm_program *program, int stack_size)
 {
-    struct asm_function *fn = program->function;
+    struct asm_function *fn = program->functions;
 
     // Insert allocate_stack (function prologue)
     struct asm_instr *alloc = alloc_instr(ASM_ALLOCSTACK);
@@ -626,7 +627,7 @@ void emit_x86(struct ir_program *ir, FILE *file)
     int stack_size = asm_phase2(program);
     asm_phase3(program, stack_size);
 
-    struct asm_function *fn = program->function;
+    struct asm_function *fn = program->functions;
     struct asm_instr *instr = fn->first;
 
     fprintf(file, "    .globl %.*s\n", fn->name_length, fn->name);

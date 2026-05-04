@@ -16,14 +16,23 @@ enum reg {
     REG_R11,
 };
 
-enum operand_type { OPERAND_IMM, OPERAND_REG, OPERAND_PSEUDO, OPERAND_STACK };
+enum operand_type {
+    OPERAND_IMM,
+    OPERAND_REG,
+    OPERAND_PSEUDO,
+    OPERAND_STACK
+};
 
 struct operand {
     enum operand_type type;
+
     union {
         int imm;
+
         enum reg reg;
+
         int stack;      // Location on the stack (eg. -4(%rbp))
+
         struct {
             const char *name;
             int length;
@@ -75,19 +84,57 @@ enum asm_instr_type {
 struct asm_instr {
     enum asm_instr_type type;
     struct asm_instr *next;
+
     union {
-        struct { struct operand src; struct operand dst; } mov;
-        struct { enum asm_op op; struct operand dst; } unary;
-        struct { enum asm_op op; struct operand src; struct operand dst; } binary;
-        struct { struct operand oper1; struct operand oper2; } cmp;
-        struct { struct operand oper; } idiv;
-        struct { } cdq;
-        struct { int identifier; } jmp;
-        struct { enum cond_code code; int identifier; } jmpcc;
-        struct { enum cond_code code; struct operand oper; } setcc;
-        struct { int identifier; } label;
-        struct { int val; } allocate_stack;
+        struct {
+            struct operand src;
+            struct operand dst;
+        } mov;
+
+        struct {
+            enum asm_op op;
+            struct operand dst;
+        } unary;
+
+        struct {
+            enum asm_op op;
+            struct operand src;
+            struct operand dst;
+        } binary;
+
+        struct {
+            struct operand oper1;
+            struct operand oper2;
+        } cmp;
+
+        struct {
+            struct operand oper;
+        } idiv;
+
+        struct {
+            int identifier;
+        } jmp;
+
+        struct {
+            enum cond_code code;
+            int identifier;
+        } jmpcc;
+
+        struct {
+            enum cond_code code;
+            struct operand oper;
+        } setcc;
+
+        struct {
+            int identifier;
+        } label;
+
+        struct {
+            int val;
+        } allocate_stack;
+
         struct { } ret;
+        struct { } cdq;
     };
 };
 
@@ -101,7 +148,7 @@ struct asm_function {
 };
 
 struct asm_program {
-    struct asm_function *function;
+    struct asm_function *functions;
 };
 
 void emit_x86(struct ir_program *ir, FILE *file);

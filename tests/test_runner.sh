@@ -38,7 +38,7 @@ run_test() {
         local tmp
         tmp=$(mktemp -d)
         local err
-        err=$(cd "$tmp" && "$OLDPWD/$CC" "$OLDPWD/$src" -o out 2>&1)
+        err=$(cd "$tmp" && "$OLDPWD/$CC" "$OLDPWD/$src" -o "$tmp/out" 2>&1)
         if [ $? -ne 0 ]; then
             echo -e "${RED}FAIL${ENDCOLOR}: $base (compiler rejected valid input)"
             echo "      $err"
