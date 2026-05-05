@@ -9,7 +9,7 @@
 #include "type.h"
 #include "base/hash_map.h"
 
-struct ir_function *current_function;
+static struct ir_function *current_function;
 
 /*
  * One per function.
@@ -245,6 +245,19 @@ static void emit_label(int label_id)
     append_instr(instr);
 }
 
+static void emit_call(const char *calle, struct ir_value *args, int arg_count,
+                        bool has_dst, struct ir_value dst)
+{
+    struct ir_instr *instr = new_instr(IR_INSTR_CALL);
+    instr->call.calle = calle;
+    instr->call.args = args;
+    instr->call.arg_count = arg_count;
+    instr->call.has_dst = has_dst;
+    instr->call.dst = dst;
+
+    append_instr(instr);
+}
+
 static struct ir_value emit_expr(struct expr *expr);
 static void emit_stmt(struct stmt *stmt);
 static void emit_decl_list(struct decl *decls);
@@ -403,8 +416,35 @@ static struct ir_value emit_expr(struct expr *expr)
             return dst;
         }
 
-        case EXPR_CALL:
-           break;
+        case EXPR_CALL: {
+            struct symbol *sym = expr->call.callee->identifier.sym;
+            const char *calle = sym->ir_name;
+
+            int arg_count = 0;
+            for (struct expr *arg = expr->call.args; arg; arg = arg->next)
+                arg_count++;
+
+            struct ir_value *args = NULL;
+            if (arg_count > 0)
+                args = calloc(arg_count, sizeof(struct ir_value));
+
+            int i = 0;
+            for (struct expr *arg = expr->call.args; arg; arg = arg->next)
+                args[i++] = emit_expr(arg);
+
+            struct type *ret_ty = expr->call.callee->ty->func.return_type;
+
+            if (type_is_void(ret_ty)) {
+                emit_call(calle, args, arg_count, false, ir_constant(0));
+                return ir_constant(0); // Dummy value, should not be used
+            }
+
+            struct ir_value dst = make_temp();
+            
+            emit_call(calle, args, arg_count, true, dst);
+
+            return dst;
+        }     
 
         default:
             break;
@@ -659,6 +699,8 @@ static void emit_function_params(struct ir_function *fn, struct decl *params)
 static void emit_implicit_fallthrough_return(struct decl *fn_decl)
 {
     struct type *ret_ty = fn_decl->ty->func.return_type;
+
+    // TODO: Add some condition to not emit return if we can
 
     if (type_is_void(ret_ty))
         emit_return_void();

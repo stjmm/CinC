@@ -45,20 +45,25 @@ static void run_cmd(const char *cmd)
     }
 }
 
-char *replace_ext(const char *orig, const char *new_ext)
+char *replace_ext(const char *path, const char *new_ext)
 {
-    char *tmp = strdup(orig);
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
 
-    char *ext = strrchr(tmp, '.');
-    if (ext)
-        *ext = '\0';
+    const char *dot = strrchr(path, '.');
 
-    size_t new_size = strlen(tmp) + strlen(new_ext) + 1;
+    size_t filename_len;
+    if (dot)
+        filename_len = (size_t)(dot - base);
+    else
+        filename_len = strlen(base);
+
+    size_t new_size = filename_len + strlen(new_ext) + 1;
     char *new_name = malloc(new_size);
+    
+    memcpy(new_name, base, filename_len);
+    strcpy(new_name + filename_len, new_ext);
 
-    sprintf(new_name, "%s%s", tmp, new_ext);
-
-    free(tmp);
     return new_name;
 }
 
@@ -103,6 +108,9 @@ static void parse_args(int argc, char **argv)
         }
 
         if (!strcmp(arg, "-o")) {
+            if (argc <= i + 1)
+                usage(argv[0]);
+
             opt_o = argv[++i];
             continue;
         }

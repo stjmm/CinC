@@ -69,7 +69,7 @@ static struct operand make_imm(int imm)
     return (struct operand){ .type = OPERAND_IMM, .imm = imm };
 }
 
-static struct asm_instr *alloc_instr(enum asm_instr_type type)
+static struct asm_instr *new_instr(enum asm_instr_type type)
 {
     struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
     instr->type = type;
@@ -78,7 +78,7 @@ static struct asm_instr *alloc_instr(enum asm_instr_type type)
 
 static struct asm_instr *make_mov(struct operand src, struct operand dst)
 {
-    struct asm_instr *instr = alloc_instr(ASM_MOV);
+    struct asm_instr *instr = new_instr(ASM_MOV);
     instr->mov.src = src;
     instr->mov.dst = dst;
     return instr;
@@ -86,7 +86,7 @@ static struct asm_instr *make_mov(struct operand src, struct operand dst)
 
 static struct asm_instr *make_unary(enum asm_op op, struct operand dst)
 {
-    struct asm_instr *instr = alloc_instr(ASM_UNARY);
+    struct asm_instr *instr = new_instr(ASM_UNARY);
     instr->unary.op = op;
     instr->unary.dst = dst;
     return instr;
@@ -95,7 +95,7 @@ static struct asm_instr *make_unary(enum asm_op op, struct operand dst)
 static struct asm_instr *make_binary(enum asm_op op, struct operand src,
                                      struct operand dst)
 {
-    struct asm_instr *instr = alloc_instr(ASM_BINARY);
+    struct asm_instr *instr = new_instr(ASM_BINARY);
     instr->binary.op = op;
     instr->binary.src = src;
     instr->binary.dst = dst;
@@ -104,7 +104,7 @@ static struct asm_instr *make_binary(enum asm_op op, struct operand src,
 
 static struct asm_instr *make_cmp(struct operand oper1, struct operand oper2)
 {
-    struct asm_instr *instr  = alloc_instr(ASM_CMP);
+    struct asm_instr *instr  = new_instr(ASM_CMP);
     instr->cmp.oper1 = oper1;
     instr->cmp.oper2 = oper2;
     return instr;
@@ -112,21 +112,21 @@ static struct asm_instr *make_cmp(struct operand oper1, struct operand oper2)
 
 static struct asm_instr *make_idiv(struct operand oper)
 {
-    struct asm_instr *instr  = alloc_instr(ASM_IDIV);
+    struct asm_instr *instr  = new_instr(ASM_IDIV);
     instr->idiv.oper = oper;
     return instr;
 }
 
 static struct asm_instr *make_jmp(int label_id)
 {
-    struct asm_instr *instr = alloc_instr(ASM_JMP);
+    struct asm_instr *instr = new_instr(ASM_JMP);
     instr->jmp.identifier = label_id;
     return instr;
 }
 
 static struct asm_instr *make_jmpcc(enum cond_code code, int label_id)
 {
-    struct asm_instr *instr = alloc_instr(ASM_JMPCC);
+    struct asm_instr *instr = new_instr(ASM_JMPCC);
     instr->jmpcc.code       = code;
     instr->jmpcc.identifier = label_id;
     return instr;
@@ -134,7 +134,7 @@ static struct asm_instr *make_jmpcc(enum cond_code code, int label_id)
 
 static struct asm_instr *make_setcc(enum cond_code code, struct operand oper)
 {
-    struct asm_instr *instr = alloc_instr(ASM_SETCC);
+    struct asm_instr *instr = new_instr(ASM_SETCC);
     instr->setcc.code = code;
     instr->setcc.oper = oper;
     return instr;
@@ -142,13 +142,13 @@ static struct asm_instr *make_setcc(enum cond_code code, struct operand oper)
 
 static struct asm_instr *make_label(int label_id)
 {
-    struct asm_instr *instr = alloc_instr(ASM_LABEL);
+    struct asm_instr *instr = new_instr(ASM_LABEL);
     instr->label.identifier = label_id;
     return instr;
 }
 
-static struct asm_instr *make_ret(void)   { return alloc_instr(ASM_RET); }
-static struct asm_instr *make_cdq(void)   { return alloc_instr(ASM_CDQ); }
+static struct asm_instr *make_ret(void)   { return new_instr(ASM_RET); }
+static struct asm_instr *make_cdq(void)   { return new_instr(ASM_CDQ); }
 
 // Convert 'ir_val' to ASM operand (immediate or pseudo)
 static struct operand convert_val(struct ir_value v)
@@ -454,7 +454,7 @@ static void asm_phase3(struct asm_program *program, int stack_size)
     struct asm_function *fn = program->functions;
 
     // Insert allocate_stack (function prologue)
-    struct asm_instr *alloc = alloc_instr(ASM_ALLOCSTACK);
+    struct asm_instr *alloc = new_instr(ASM_ALLOCSTACK);
     alloc->allocate_stack.val = stack_size;
     alloc->next = fn->first;
     fn->first = alloc;

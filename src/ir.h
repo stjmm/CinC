@@ -89,7 +89,9 @@ struct ir_instr {
 
         struct {
             const char *calle;
-            struct ir_arg *args;
+
+            struct ir_value *args; // Array of args
+            int arg_count;
 
             bool has_dst;
             struct ir_value dst;
