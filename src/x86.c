@@ -159,7 +159,6 @@ static struct operand convert_val(struct ir_value v)
         return (struct operand){
             .type = OPERAND_PSEUDO,
             .pseudo.name = v.name,
-            .pseudo.length = (int)strlen(v.name)
         };
     }
 }
@@ -343,7 +342,6 @@ static struct asm_function *emit_function(struct ir_function *fn)
 {
     struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
     asm_fn->name = fn->name;
-    asm_fn->name_length = (int)strlen(fn->name);
 
     for (struct ir_instr *i = fn->first; i != NULL; i = i->next) {
         emit_instr(asm_fn, i);
@@ -396,7 +394,7 @@ static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
     if (oper->type != OPERAND_PSEUDO)
         return;
 
-    int offset = pseudo_map_get_or_insert(pm, oper->pseudo.name, oper->pseudo.length);
+    int offset = pseudo_map_get_or_insert(pm, oper->pseudo.name, strlen(oper->pseudo.name));
     oper->type  = OPERAND_STACK;
     oper->stack = offset;
 }
@@ -630,8 +628,8 @@ void emit_x86(struct ir_program *ir, FILE *file)
     struct asm_function *fn = program->functions;
     struct asm_instr *instr = fn->first;
 
-    fprintf(file, "    .globl %.*s\n", fn->name_length, fn->name);
-    fprintf(file, "%.*s:\n", fn->name_length, fn->name);
+    fprintf(file, "    .globl %s\n", fn->name);
+    fprintf(file, "%s:\n", fn->name);
     fprintf(file, "    pushq    %%rbp\n");
     fprintf(file, "    movq     %%rsp, %%rbp\n");
 

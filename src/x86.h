@@ -35,7 +35,6 @@ struct operand {
 
         struct {
             const char *name;
-            int length;
         } pseudo;     // Refers to temporary variables produced in TACKY
     };
 };
@@ -142,7 +141,6 @@ struct asm_instr {
 
 struct asm_function {
     const char *name;
-    int name_length;
     struct asm_instr *first;
     struct asm_instr *last;
 };

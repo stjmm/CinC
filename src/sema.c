@@ -261,13 +261,23 @@ static void validate_for_init_decls(struct decl *decls)
 
 static void validate_function_params(struct decl *fn)
 {
+    hash_map params;
+    hashmap_init(&params);
+
     for (struct decl *p = fn->func.params; p; p = p->next) {
         if (type_is_void(p->ty))
             error(&p->name, "Function parameter cannot be type void");
 
         if (p->storage_class != SC_NONE && p->storage_class != SC_REGISTER)
             error(&p->name, "Only 'register' storage class can be used as a parameter");
+
+        if (hashmap_get(&params, p->name.start, p->name.length))
+            error(&p->name, "Duplicate parameter definiton");
+
+        hashmap_set(&params, p->name.start, p->name.length, p);
     }
+
+    hashmap_free(&params);
 }
 
 static void validate_decl(struct decl *d)
@@ -667,10 +677,15 @@ static void analyze_stmt(struct stmt *stmt)
                 }
             }
 
-            analyze_expr(stmt->for_stmt.condition);
-            require_int_expression(stmt->for_stmt.condition,
-                                    "For condition must have type int");
-            analyze_expr(stmt->for_stmt.post);
+            if (stmt->for_stmt.condition) {
+                analyze_expr(stmt->for_stmt.condition);
+                require_int_expression(stmt->for_stmt.condition,
+                        "For condition must have type int");
+            }
+
+            if (stmt->for_stmt.post)
+                analyze_expr(stmt->for_stmt.post);
+
             analyze_stmt(stmt->for_stmt.body);
 
             scope_pop(current_scope);

@@ -195,6 +195,9 @@ int main(int argc, char **argv)
     for (int i = 0; i < input_file_count; i++)
         objects[i] = compile_file(input_files[i]);
 
-    if (!opt_S && !opt_c)
+    if (!opt_S && !opt_c) {
         link_files(objects);
+        for (int i = 0; i <  input_file_count; i++)
+            remove(objects[i]);
+    }
 }
