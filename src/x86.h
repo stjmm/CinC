@@ -12,6 +12,10 @@ enum reg {
     REG_AX,
     REG_CX,
     REG_DX,
+    REG_DI,
+    REG_SI,
+    REG_R8,
+    REG_R9,
     REG_R10,
     REG_R11,
 };
@@ -77,6 +81,9 @@ enum asm_instr_type {
     ASM_SETCC,
     ASM_LABEL,
     ASM_ALLOCSTACK,
+    ASM_DEALLOCSTACK,
+    ASM_PUSH,
+    ASM_CALL,
     ASM_RET,
 };
 
@@ -132,6 +139,18 @@ struct asm_instr {
             int val;
         } allocate_stack;
 
+        struct {
+            int val;
+        } deallocate_stack;
+
+        struct {
+            struct operand oper;
+        } push;
+
+        struct {
+            const char *identifier;
+        } call;
+
         struct { } ret;
         struct { } cdq;
     };
@@ -141,8 +160,12 @@ struct asm_instr {
 
 struct asm_function {
     const char *name;
+    struct asm_function *next;
+
     struct asm_instr *first;
     struct asm_instr *last;
+
+    int stack_size;
 };
 
 struct asm_program {

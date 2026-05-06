@@ -69,6 +69,11 @@ static struct operand make_imm(int imm)
     return (struct operand){ .type = OPERAND_IMM, .imm = imm };
 }
 
+static struct operand make_stack(int offset)
+{
+    return (struct operand){ .type = OPERAND_STACK, .stack = offset };
+}
+
 static struct asm_instr *new_instr(enum asm_instr_type type)
 {
     struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
@@ -190,14 +195,16 @@ static struct asm_instr *replace_instr(struct asm_function *fn,
     return last_new;
 }
 
-static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
+static void lower_ir_instr(struct asm_function *fn, struct ir_instr *instr)
 {
     switch (instr->kind) {
         case IR_INSTR_RETURN: {
             // return val -> movl val, %eax
-            struct operand src = convert_val(instr->ret.src);
+            if (instr->ret.has_value) {
+                struct operand src = convert_val(instr->ret.src);
+                append_instr(fn, make_mov(src, make_reg(REG_AX)));
+            }
 
-            append_instr(fn, make_mov(src, make_reg(REG_AX)));
             append_instr(fn, make_ret());
             break;
         }
@@ -338,30 +345,43 @@ static void emit_instr(struct asm_function *fn, struct ir_instr *instr)
     }
 }
 
-static struct asm_function *emit_function(struct ir_function *fn)
+static struct asm_function *lower_ir_function(struct ir_function *fn)
 {
     struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
     asm_fn->name = fn->name;
 
     for (struct ir_instr *i = fn->first; i != NULL; i = i->next) {
-        emit_instr(asm_fn, i);
+        lower_ir_instr(asm_fn, i);
     }
 
     return asm_fn;
 }
 
-static struct asm_program *asm_phase1(struct ir_program *ir)
+static struct asm_program *lower_ir_program(struct ir_program *ir)
 {
     struct asm_program *program = calloc(1, sizeof(struct asm_program));
-    program->functions = emit_function(ir->functions);
+
+    struct asm_function *head = NULL;
+    struct asm_function *tail = NULL;
+
+    for (struct ir_function *ir_fn = ir->functions; ir_fn; ir_fn = ir_fn->next) {
+        struct asm_function *asm_fn = lower_ir_function(ir_fn);
+
+        if (!head)
+            head = asm_fn;
+        else
+            tail->next = asm_fn;
+        tail = asm_fn;
+    }
+
+    program->functions = head;
+
     return program;
 }
 
 /* Phase 2: Replace pseduo operands with RBP-relative stack slots */
-
 struct pseudo_entry {
-    const char *name;
-    int length;
+    const char *name; // Pseudo from IR
     int stack_offset; // Negative offset from %rbp
 };
 
@@ -370,21 +390,19 @@ struct pseudo_map {
     int current_offset;
 };
 
-static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name, int length)
+static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name)
 {
-    struct pseudo_entry *e = hashmap_get(&pm->entries, name, length);
-    if (e)
-        return e->stack_offset;
+    struct pseudo_entry *entry = hashmap_get(&pm->entries, name, strlen(name));
+    if (entry)
+        return entry->stack_offset;
 
     pm->current_offset -= STACK_SLOT_SIZE;
 
-    e = malloc(sizeof(struct pseudo_entry));
-    *e = (struct pseudo_entry){
-        .name         = name,
-        .length       = length,
-        .stack_offset = pm->current_offset,
-    };
-    hashmap_set(&pm->entries, name, length, e);
+    entry = malloc(sizeof(struct pseudo_entry));
+    entry->name = name;
+    entry->stack_offset = pm->current_offset;
+
+    hashmap_set(&pm->entries, name, strlen(name), entry);
 
     return pm->current_offset;
 }
@@ -394,18 +412,19 @@ static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
     if (oper->type != OPERAND_PSEUDO)
         return;
 
-    int offset = pseudo_map_get_or_insert(pm, oper->pseudo.name, strlen(oper->pseudo.name));
+    int offset = pseudo_map_get_or_insert(pm, oper->pseudo.name);
     oper->type  = OPERAND_STACK;
     oper->stack = offset;
 }
 
-// Walk the instruction list, replace every pseudo
-static int asm_phase2(struct asm_program *program)
+/*
+ * Replace every pseudo variable with a stack operand.
+ */
+static int assign_stack_slots(struct asm_function *fn)
 {
     struct pseudo_map pm = {0};
     hashmap_init(&pm.entries);
 
-    struct asm_function *fn = program->functions;
     for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {
         switch (instr->type) {
             case ASM_MOV:
@@ -434,7 +453,18 @@ static int asm_phase2(struct asm_program *program)
         }
     }
 
-    return -pm.current_offset;  // return total bytes needed for stack frame
+    int raw_size = -pm.current_offset;
+    hashmap_free(&pm.entries);
+
+    return raw_size;
+}
+
+static void asm_phase2(struct asm_program *program)
+{
+    for (struct asm_function *fn = program->functions; fn; fn = fn->next) {
+        int stack_size = assign_stack_slots(fn);
+        fn->stack_size = stack_size;
+    }
 }
 
 
@@ -449,13 +479,11 @@ static int asm_phase2(struct asm_program *program)
  * CMP mem, mem -> MOV oper1, %r10d / CMP %r10d, oper2
  * CMP oper1, $imm -> MOV $imm, %r11d / CMP oper1, %r11d
  */
-static void asm_phase3(struct asm_program *program, int stack_size)
+static void asm_phase3(struct asm_function *fn)
 {
-    struct asm_function *fn = program->functions;
-
     // Insert allocate_stack (function prologue)
     struct asm_instr *alloc = new_instr(ASM_ALLOCSTACK);
-    alloc->allocate_stack.val = stack_size;
+    alloc->allocate_stack.val = fn->stack_size;
     alloc->next = fn->first;
     fn->first = alloc;
 
@@ -548,26 +576,50 @@ static void asm_phase3(struct asm_program *program, int stack_size)
     }
 }
 
-static const char *reg_name_32(enum reg r)
-{
-    switch (r) {
-        case REG_AX:  return "eax";
-        case REG_CX:  return "ecx";
-        case REG_DX:  return "edx";
-        case REG_R10: return "r10d";
-        case REG_R11: return "r11d";
-        default:      return "unknown";
-    }
-}
-
 static const char *reg_name_8(enum reg r)
 {
     switch (r) {
         case REG_AX:  return "al";
         case REG_CX:  return "cl";
         case REG_DX:  return "dl";
+        case REG_DI:  return "dil";
+        case REG_SI:  return "sil";
+        case REG_R8: return  "r8b";
+        case REG_R9: return  "r9b";
         case REG_R10: return "r10b";
         case REG_R11: return "r11b";
+        default:      return "unknown";
+    }
+}
+
+static const char *reg_name_32(enum reg r)
+{
+    switch (r) {
+        case REG_AX:  return "eax";
+        case REG_CX:  return "ecx";
+        case REG_DX:  return "edx";
+        case REG_DI:  return "edi";
+        case REG_SI:  return "esi";
+        case REG_R8: return  "r8d";
+        case REG_R9: return  "r9d";
+        case REG_R10: return "r10d";
+        case REG_R11: return "r11d";
+        default:      return "unknown";
+    }
+}
+
+static const char *reg_name_64(enum reg r)
+{
+    switch (r) {
+        case REG_AX:  return "rax";
+        case REG_CX:  return "rcx";
+        case REG_DX:  return "rdx";
+        case REG_DI:  return "rdi";
+        case REG_SI:  return "rsi";
+        case REG_R8: return  "r8";
+        case REG_R9: return  "r9";
+        case REG_R10: return "r10";
+        case REG_R11: return "r11";
         default:      return "unknown";
     }
 }
@@ -602,11 +654,16 @@ static const char *asm_op_str(enum asm_op op)
     }
 }
 
-static void emit_operand(FILE *file, struct operand op, bool use_8bit)
+static void write_operand(FILE *file, struct operand op, int reg_size)
 {
     switch (op.type) {
         case OPERAND_REG:
-            fprintf(file, "%%%s", use_8bit ? reg_name_8(op.reg) : reg_name_32(op.reg));
+            if (reg_size == 8)
+                fprintf(file, "%%%s", reg_name_8(op.reg));
+            else if (reg_size == 32)
+                fprintf(file, "%%%s", reg_name_32(op.reg));
+            else if (reg_size == 64)
+                fprintf(file, "%%%s", reg_name_64(op.reg));
             break;
         case OPERAND_STACK:
             fprintf(file, "%d(%%rbp)", op.stack);
@@ -619,73 +676,59 @@ static void emit_operand(FILE *file, struct operand op, bool use_8bit)
     }
 }
 
-void emit_x86(struct ir_program *ir, FILE *file)
+void emit_function(struct asm_function *fn, FILE *file)
 {
-    struct asm_program *program = asm_phase1(ir);
-    int stack_size = asm_phase2(program);
-    asm_phase3(program, stack_size);
-
-    struct asm_function *fn = program->functions;
-    struct asm_instr *instr = fn->first;
-
     fprintf(file, "    .globl %s\n", fn->name);
     fprintf(file, "%s:\n", fn->name);
     fprintf(file, "    pushq    %%rbp\n");
     fprintf(file, "    movq     %%rsp, %%rbp\n");
 
-    while (instr) {
+    for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {
         switch (instr->type) {
-            case ASM_ALLOCSTACK: {
+            case ASM_ALLOCSTACK:
                 fprintf(file, "    subq     $%d, %%rsp\n", instr->allocate_stack.val);
                 break;
-            }
-            case ASM_CDQ: {
+            case ASM_CDQ:
                 fprintf(file, "    cdq\n");
                 break;
-            }
-            case ASM_MOV: {
+            case ASM_MOV:
                 fprintf(file, "    movl     ");
-                emit_operand(file, instr->mov.src, false);
+                write_operand(file, instr->mov.src, 32);
                 fprintf(file, ", ");
-                emit_operand(file, instr->mov.dst, false);
+                write_operand(file, instr->mov.dst, 32);
                 fprintf(file, "\n");
                 break;
-            }
-            case ASM_UNARY: {
+            case ASM_UNARY:
                 fprintf(file, "    %s     ", asm_op_str(instr->unary.op));
-                emit_operand(file, instr->unary.dst, false);
+                write_operand(file, instr->unary.dst, 32);
                 fprintf(file, "\n");
                 break;
-            }
-            case ASM_BINARY: {
+            case ASM_BINARY:
                 bool is_shift = instr->binary.op == ASM_SHL || instr->binary.op == ASM_SHR;
+                bool is_reg = instr->binary.src.type == OPERAND_REG;
                 fprintf(file, "    %s     ", asm_op_str(instr->binary.op));
-                emit_operand(file, instr->binary.src, is_shift && instr->binary.src.type == OPERAND_REG);
+                write_operand(file, instr->binary.src, is_shift && is_reg ? 8 : 32);
                 fprintf(file, ", ");
-                emit_operand(file, instr->binary.dst, false);
+                write_operand(file, instr->binary.dst, 32);
                 fprintf(file, "\n");
                 break;
-            }
-            case ASM_IDIV: {
+            case ASM_IDIV:
                 fprintf(file, "    idivl    ");
-                emit_operand(file, instr->idiv.oper, false);
+                write_operand(file, instr->idiv.oper, 32);
                 fprintf(file, "\n");
                 break;
-            }
-            case ASM_RET: {
+            case ASM_RET:
                 fprintf(file, "    movq     %%rbp, %%rsp\n");
                 fprintf(file, "    popq     %%rbp\n");
                 fprintf(file, "    ret\n");
                 break;
-            }
-            case ASM_CMP: {
+            case ASM_CMP:
                 fprintf(file, "    cmpl     ");
-                emit_operand(file, instr->cmp.oper1, false);
+                write_operand(file, instr->cmp.oper1, 32);
                 fprintf(file, ", ");
-                emit_operand(file, instr->cmp.oper2, false);
+                write_operand(file, instr->cmp.oper2, 32);
                 fprintf(file, "\n");
                 break;
-            }
             case ASM_JMP: {
                 char l[10];
                 sprintf(l, ".L%d", instr->jmp.identifier);
@@ -698,12 +741,11 @@ void emit_x86(struct ir_program *ir, FILE *file)
                 fprintf(file, "    j%s    %s\n", cond_suffix(instr->jmpcc.code), l);
                 break;
             }
-            case ASM_SETCC: {
+            case ASM_SETCC:
                 fprintf(file, "    set%s    ", cond_suffix(instr->setcc.code));
-                emit_operand(file, instr->setcc.oper, true);
+                write_operand(file, instr->setcc.oper, 8);
                 fprintf(file, "\n");
                 break;
-            }
             case ASM_LABEL: {
                 char l[10];
                 sprintf(l, ".L%d", instr->label.identifier);
@@ -711,9 +753,20 @@ void emit_x86(struct ir_program *ir, FILE *file)
                 break;
             }
         }
-        instr = instr->next;
     }
-    
+}
+
+void emit_x86(struct ir_program *ir, FILE *file)
+{
+    struct asm_program *program = lower_ir_program(ir);
+    asm_phase2(program);
+    for (struct asm_function *fn = program->functions; fn; fn = fn->next)
+        asm_phase3(fn);
+
+    for (struct asm_function *fn = program->functions; fn; fn = fn->next) {
+        emit_function(fn, file);
+    }
+
     // Linux/ELF requirement
     fprintf(file, "\n    .section .note.GNU-stack,\"\",@progbits\n");
 }
