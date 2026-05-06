@@ -556,6 +556,8 @@ static int assign_stack_slots(struct asm_function *fn)
                 replace_pseudo(&instr->cmp.lhs, &pm);
                 replace_pseudo(&instr->cmp.rhs, &pm);
                 break;
+            case ASM_PUSH:
+                replace_pseudo(&instr->push.oper, &pm);
             default:
                 break;
         }
@@ -695,7 +697,7 @@ static void asm_phase3(struct asm_function *fn)
             }
             
             case ASM_PUSH: {
-                if (curr->push.oper.type == OPERAND_PSEUDO) {
+                if (curr->push.oper.type == OPERAND_STACK) {
                     struct asm_instr *a = make_mov(curr->push.oper, r10);
                     struct asm_instr *b = make_push(r10);
 
@@ -833,7 +835,7 @@ void emit_function(struct asm_function *fn, FILE *file)
                 fprintf(file, "\n");
                 break;
             case ASM_CALL:
-                fprintf(file, "   call     %s\n", instr->call.identifier);
+                fprintf(file, "    call     %s\n", instr->call.identifier);
                 break;
             case ASM_CDQ:
                 fprintf(file, "    cdq\n");
@@ -850,7 +852,7 @@ void emit_function(struct asm_function *fn, FILE *file)
                 write_operand(file, instr->unary.oper, 32);
                 fprintf(file, "\n");
                 break;
-            case ASM_BINARY:
+            case ASM_BINARY: {
                 bool is_shift = instr->binary.op == ASM_SHL || instr->binary.op == ASM_SHR;
                 bool is_reg = instr->binary.src.type == OPERAND_REG;
                 fprintf(file, "    %s     ", asm_op_str(instr->binary.op));
@@ -859,6 +861,7 @@ void emit_function(struct asm_function *fn, FILE *file)
                 write_operand(file, instr->binary.dst, 32);
                 fprintf(file, "\n");
                 break;
+            }
             case ASM_IDIV:
                 fprintf(file, "    idivl    ");
                 write_operand(file, instr->idiv.oper, 32);
