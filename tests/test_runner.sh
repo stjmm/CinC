@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
+
 SCRIPT_DIR=$(dirname "$0")
 CC="$SCRIPT_DIR/../build/cinc"
+
 PASS=0
 FAIL=0
 VERBOSE=0
+CHAPTER=""
 
 GREEN="\e[32m"
 RED="\e[31m"
+YELLOW="\e[33m"
 ENDCOLOR="\e[0m"
 
 while getopts "vc:" opt; do
@@ -17,50 +21,109 @@ while getopts "vc:" opt; do
     esac
 done
 
-run_test() {
+tag_of() {
     local src="$1"
-    local base=$(basename "$src" .c)
-    local tag="${base%%.*}"
+    local base
+    base="$(basename "$src" .c)"
+    echo "${base%%.*}"
+}
+
+pass() {
+    echo -e "${GREEN}PASS${ENDCOLOR}: $1"
+    ((PASS++))
+}
+
+fail() {
+    echo -e "${RED}FAIL${ENDCOLOR}: $1"
+    [ $# -gt 1 ] echo "     $2"
+    ((FAIL++))
+}
+
+compile_and_run() {
+    local expected="$1"
+    shift
+
+    local name="$1"
+    shift
+
+    local tmp
+    tmp="$(mktemp -d)"
+
+    local err
+    err=$("$CC" "$@" -o "$tmp/out 2>&1")
+    local status=$?
+
+    if [ "$status" -ne 0 ]; then
+        fail "$name (compiler rejected valid input)" "$err"
+        rm -rf "$tmp"
+        return
+    fi
+
+    "$tmp/out"
+    local got=$?
+
+    rm -rf "$tmp"
+
+    if [ "$got" -eq "$expected" ]; then
+        pass "$name (exited $got)"
+    else
+        fail "$name (expected exit $expected, got $got)"
+    fi
+}
+
+run_single_test() {
+    local src="$1"
+    local base tag
+
+    base="$(basename "$src" .c)"
+    tag="$(tag_of "$src")"
 
     if [ "$tag" = "fail" ]; then
         local err
         err=$("$CC" "$src" 2>&1)
         if [ $? -ne 0 ]; then
-            echo -e "${GREEN}PASS${ENDCOLOR}: $base"
-            [ $VERBOSE -eq 1 ] && echo "      $err"
-            ((PASS++))
+            pass "$base"
+            [ "$VERBOSE" -eq 1 ] && echo "      $err"
         else
-            echo -e "${RED}FAIL${ENDCOLOR}: $base (expected compiler error, got success)"
-            ((FAIL++))
+            fail "$base (expected compiler error, got success)"
         fi
-
     elif [[ "$tag" =~ ^[0-9]+$ ]]; then
-        local tmp
-        tmp=$(mktemp -d)
-        local err
-        err=$(cd "$tmp" && "$OLDPWD/$CC" "$OLDPWD/$src" -o "$tmp/out" 2>&1)
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}FAIL${ENDCOLOR}: $base (compiler rejected valid input)"
-            echo "      $err"
-            ((FAIL++))
-            rm -rf "$tmp"; return
-        fi
-        "$tmp/out"
-        local got=$?
-        rm -rf "$tmp"
-        if [ "$got" -eq "$tag" ]; then
-            echo -e "${GREEN}PASS${ENDCOLOR}: $base (exited $got)"
-            ((PASS++))
-        else
-            echo -e "${RED}FAIL${ENDCOLOR}: $base (expected exit $tag, got $got)"
-            ((FAIL++))
-        fi
+        compile_and_run "$tag" "$base" "$src"
     else
-        echo "SKIP: $base (no recognized tag: use .fail or .<number>)"
+        echo -e "${YELLOW}SKIP${ENDCOLOR}: $base (no recognized tag)"
     fi
 }
 
+run_library_test() {
+    local client="$1"
+    local dir base tag stem
+    local inputs=()
+
+    dir="$(dirname "$client")"
+    base="$(basename "$client" .c)"
+    tag="$(tag_of "$client")"
+
+    if ! [[ "$tag" =~ ^[0-9]+$ ]]; then
+        echo -e "${YELLOW}SKIP${ENDCOLOR}: $base (library client needs numeric tag)"
+        return
+    fi
+
+    stem="${base#*.}"
+    stem="${stem%_client}"
+
+    for f in "$dir"/"$stem".c "$dir"/"$stem".*.c; do
+        [ -e "$f" ] || continue
+        [ "$f" = "$client" ] && continue
+        inputs+=("$f")
+    done
+
+    inputs+=("$client")
+
+    compile_and_run "$tag" "libraries/$base" "${inputs[@]}"
+}
+
 shopt -s globstar nullglob
+
 
 if [ -n "$CHAPTER" ]; then
     SEARCH_DIR="$SCRIPT_DIR/chapter$CHAPTER"
@@ -73,5 +136,18 @@ else
 fi
 
 for f in "$SEARCH_DIR"/**/*.c; do
-    run_test "$f"
+    case "$f" in
+        */libraries/*) continue ;;
+    esac
+    run_single_test "$f"
 done
+
+for f in "$SEARCH_DIR"/**/libraries/*_client.c; do
+    run_library_test "$f"
+done
+
+echo
+echo "Passed: $PASS"
+echo "Failed: $FAIL"
+
+[ "$FAIL" -eq 0 ]

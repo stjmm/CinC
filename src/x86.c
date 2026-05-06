@@ -438,10 +438,10 @@ static void lower_ir_params(struct asm_function *asm_fn, struct ir_function *ir_
             /*
              * Stack args:
              *
-             * 16(%rbp) = 7th integer argument
-             * 24(&rbp) = 8th...
+             * 8(%rbp) is return address of calle, so:
+             *  16(%rbp) = 7th integer argument
+             *  24(&rbp) = 8th...
              */
-
             int stack_offset = 16 + 8 * (i - ARG_REG_COUNT);
             src = make_stack(stack_offset);
         }
@@ -835,6 +835,7 @@ void emit_function(struct asm_function *fn, FILE *file)
                 fprintf(file, "\n");
                 break;
             case ASM_CALL:
+                // TODO: Add @PLT
                 fprintf(file, "    call     %s\n", instr->call.identifier);
                 break;
             case ASM_CDQ:
