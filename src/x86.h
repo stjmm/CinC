@@ -99,7 +99,7 @@ struct asm_instr {
 
         struct {
             enum asm_op op;
-            struct operand dst;
+            struct operand oper;
         } unary;
 
         struct {
@@ -109,8 +109,8 @@ struct asm_instr {
         } binary;
 
         struct {
-            struct operand oper1;
-            struct operand oper2;
+            struct operand lhs;
+            struct operand rhs;
         } cmp;
 
         struct {

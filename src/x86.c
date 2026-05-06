@@ -9,6 +9,7 @@
  *
  * Phase 3: Function prologue, rewrite any illegal x86 ops.
  */
+#include <alloca.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,16 @@
 #include "base/hash_map.h"
 
 #define STACK_SLOT_SIZE 4
+#define ARG_REG_COUNT 6
+
+static const enum reg arg_regs[] = {
+    REG_DI,
+    REG_SI,
+    REG_DX,
+    REG_CX,
+    REG_R8,
+    REG_R9
+};
 
 /* Phase 1: Build ASM AST from IR AST */
 
@@ -59,6 +70,7 @@ static enum cond_code convert_to_cond(enum ir_binary_op op)
         default:               return COND_E; // Unreachable
     }
 }
+
 static struct operand make_reg(enum reg r)
 {
     return (struct operand){ .type = OPERAND_REG, .reg = r, };
@@ -72,6 +84,11 @@ static struct operand make_imm(int imm)
 static struct operand make_stack(int offset)
 {
     return (struct operand){ .type = OPERAND_STACK, .stack = offset };
+}
+
+static struct operand make_pseudo(const char *name)
+{
+    return (struct operand){ .type = OPERAND_PSEUDO, .pseudo.name = name };
 }
 
 static struct asm_instr *new_instr(enum asm_instr_type type)
@@ -93,7 +110,7 @@ static struct asm_instr *make_unary(enum asm_op op, struct operand dst)
 {
     struct asm_instr *instr = new_instr(ASM_UNARY);
     instr->unary.op = op;
-    instr->unary.dst = dst;
+    instr->unary.oper = dst;
     return instr;
 }
 
@@ -110,8 +127,8 @@ static struct asm_instr *make_binary(enum asm_op op, struct operand src,
 static struct asm_instr *make_cmp(struct operand oper1, struct operand oper2)
 {
     struct asm_instr *instr  = new_instr(ASM_CMP);
-    instr->cmp.oper1 = oper1;
-    instr->cmp.oper2 = oper2;
+    instr->cmp.lhs = oper1;
+    instr->cmp.rhs = oper2;
     return instr;
 }
 
@@ -152,20 +169,37 @@ static struct asm_instr *make_label(int label_id)
     return instr;
 }
 
+static struct asm_instr *make_alloc_stack(int value)
+{
+    struct asm_instr *instr = new_instr(ASM_ALLOCSTACK);
+    instr->allocate_stack.val = value;
+    return instr;
+}
+
+static struct asm_instr *make_dealloc_stack(int value)
+{
+    struct asm_instr *instr = new_instr(ASM_DEALLOCSTACK);
+    instr->deallocate_stack.val = value;
+    return instr;
+}
+
+static struct asm_instr *make_push(struct operand oper)
+{
+    struct asm_instr *instr = new_instr(ASM_PUSH);
+    instr->push.oper = oper;
+    return instr;
+}
+
 static struct asm_instr *make_ret(void)   { return new_instr(ASM_RET); }
 static struct asm_instr *make_cdq(void)   { return new_instr(ASM_CDQ); }
 
 // Convert 'ir_val' to ASM operand (immediate or pseudo)
-static struct operand convert_val(struct ir_value v)
+static struct operand convert_val(struct ir_value val)
 {
-    if (v.kind == IR_VALUE_CONSTANT) {
-        return make_imm(v.constant);
-    } else {
-        return (struct operand){
-            .type = OPERAND_PSEUDO,
-            .pseudo.name = v.name,
-        };
-    }
+    if (val.kind == IR_VALUE_CONSTANT)
+        return make_imm(val.constant);
+    else
+        return make_pseudo(val.name);
 }
 
 static void append_instr(struct asm_function *fn, struct asm_instr *instr)
@@ -206,6 +240,52 @@ static void lower_ir_instr(struct asm_function *fn, struct ir_instr *instr)
             }
 
             append_instr(fn, make_ret());
+            break;
+        }
+        case IR_INSTR_CALL: {
+            int arg_count = instr->call.arg_count;
+
+            int stack_arg_count = 0;
+            if (arg_count > ARG_REG_COUNT)
+                stack_arg_count = arg_count - ARG_REG_COUNT;
+
+            /*
+             * Keep the stack 16-byte aligned before the call.
+             *
+             * At this point stack is 16-byte aligned.
+             * If we push uneven number of stack args (8 byte)
+             * align to 16 byte again.
+             */
+            int padding = 0;
+            if (stack_arg_count % 2 != 0)
+                padding = 8;
+
+            if (padding)
+                append_instr(fn, make_alloc_stack(padding));
+
+            // Push stack args right-to-left
+            for (int i = arg_count - 1; i >= ARG_REG_COUNT; i--) {
+                struct operand arg = convert_val(instr->call.args[i]);
+                append_instr(fn, make_push(arg));
+            }
+
+            for (int i = 0; i < arg_count && i < ARG_REG_COUNT; i++) {
+                struct operand arg = convert_val(instr->call.args[i]);
+                append_instr(fn, make_mov(arg, make_reg(arg_regs[i])));
+            }
+
+            struct asm_instr *call = new_instr(ASM_CALL);
+            call->call.identifier = instr->call.calle;
+            append_instr(fn, call);
+
+            int bytes_to_remove = 8 * stack_arg_count + padding;
+            if (bytes_to_remove)
+                append_instr(fn, make_dealloc_stack(bytes_to_remove));
+
+            if (instr->call.has_dst) {
+                struct operand dst = convert_val(instr->call.dst);
+                append_instr(fn, make_mov(make_reg(REG_AX), dst));
+            }
             break;
         }
         case IR_INSTR_UNARY: {
@@ -345,12 +425,40 @@ static void lower_ir_instr(struct asm_function *fn, struct ir_instr *instr)
     }
 }
 
-static struct asm_function *lower_ir_function(struct ir_function *fn)
+static void lower_ir_params(struct asm_function *asm_fn, struct ir_function *ir_fn)
+{
+    int i = 0;
+    for (struct ir_param *param = ir_fn->params; param; param = param->next) {
+        struct operand dst = make_pseudo(param->name);
+        struct operand src;
+
+        if (i < ARG_REG_COUNT) {
+            src = make_reg(arg_regs[i]);
+        } else {
+            /*
+             * Stack args:
+             *
+             * 16(%rbp) = 7th integer argument
+             * 24(&rbp) = 8th...
+             */
+
+            int stack_offset = 16 + 8 * (i - ARG_REG_COUNT);
+            src = make_stack(stack_offset);
+        }
+
+        append_instr(asm_fn, make_mov(src, dst));
+        i++;
+    }
+}
+
+static struct asm_function *lower_ir_function(struct ir_function *ir_fn)
 {
     struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
-    asm_fn->name = fn->name;
+    asm_fn->name = ir_fn->name;
 
-    for (struct ir_instr *i = fn->first; i != NULL; i = i->next) {
+    lower_ir_params(asm_fn, ir_fn);
+
+    for (struct ir_instr *i = ir_fn->first; i != NULL; i = i->next) {
         lower_ir_instr(asm_fn, i);
     }
 
@@ -432,7 +540,7 @@ static int assign_stack_slots(struct asm_function *fn)
                 replace_pseudo(&instr->mov.dst, &pm);
                 break;
             case ASM_UNARY:
-                replace_pseudo(&instr->unary.dst, &pm);
+                replace_pseudo(&instr->unary.oper, &pm);
                 break;
             case ASM_BINARY:
                 replace_pseudo(&instr->binary.src, &pm);
@@ -445,8 +553,8 @@ static int assign_stack_slots(struct asm_function *fn)
                 replace_pseudo(&instr->idiv.oper, &pm);
                 break;
             case ASM_CMP:
-                replace_pseudo(&instr->cmp.oper1, &pm);
-                replace_pseudo(&instr->cmp.oper2, &pm);
+                replace_pseudo(&instr->cmp.lhs, &pm);
+                replace_pseudo(&instr->cmp.rhs, &pm);
                 break;
             default:
                 break;
@@ -459,11 +567,21 @@ static int assign_stack_slots(struct asm_function *fn)
     return raw_size;
 }
 
+static int align_to(int value, int align)
+{
+    return (value + (align - 1)) / align * align;
+}
+
 static void asm_phase2(struct asm_program *program)
 {
     for (struct asm_function *fn = program->functions; fn; fn = fn->next) {
         int stack_size = assign_stack_slots(fn);
-        fn->stack_size = stack_size;
+
+        /*
+         * Keep the stack frame 16 byte aligned.
+         * System-V ABI.
+         */
+        fn->stack_size = align_to(stack_size, 16);
     }
 }
 
@@ -481,12 +599,19 @@ static void asm_phase2(struct asm_program *program)
  */
 static void asm_phase3(struct asm_function *fn)
 {
-    // Insert allocate_stack (function prologue)
-    struct asm_instr *alloc = new_instr(ASM_ALLOCSTACK);
-    alloc->allocate_stack.val = fn->stack_size;
-    alloc->next = fn->first;
-    fn->first = alloc;
+    /*
+     * Insert stack allocation for function prologue.
+     * Stack size calculated in phase 2.
+     */
+    if (fn->stack_size > 0) {
+        struct asm_instr *instr = make_alloc_stack(fn->stack_size);
 
+        instr->next = fn->first;
+        fn->first = instr;
+
+        if (!fn->last)
+            fn->last = instr;
+    }
     
     struct operand r10 = make_reg(REG_R10);
     struct operand r11 = make_reg(REG_R11);
@@ -554,15 +679,26 @@ static void asm_phase3(struct asm_function *fn)
                 break;
             }
             case ASM_CMP: {
-                if (curr->cmp.oper1.type == OPERAND_STACK &&
-                    curr->cmp.oper2.type == OPERAND_STACK) {
-                    struct asm_instr *a = make_mov(curr->cmp.oper1, r10);
-                    struct asm_instr *b = make_cmp(r10, curr->cmp.oper2);
+                if (curr->cmp.lhs.type == OPERAND_STACK &&
+                    curr->cmp.rhs.type == OPERAND_STACK) {
+                    struct asm_instr *a = make_mov(curr->cmp.lhs, r10);
+                    struct asm_instr *b = make_cmp(r10, curr->cmp.rhs);
                     a->next = b;
                     curr = replace_instr(fn, prev, curr, a, b);
-                } else if (curr->cmp.oper2.type == OPERAND_IMM) {
-                    struct asm_instr *a = make_mov(curr->cmp.oper2, r11);
-                    struct asm_instr *b = make_cmp(curr->cmp.oper1, r11);
+                } else if (curr->cmp.rhs.type == OPERAND_IMM) {
+                    struct asm_instr *a = make_mov(curr->cmp.rhs, r11);
+                    struct asm_instr *b = make_cmp(curr->cmp.lhs, r11);
+                    a->next = b;
+                    curr = replace_instr(fn, prev, curr, a, b);
+                }
+                break;
+            }
+            
+            case ASM_PUSH: {
+                if (curr->push.oper.type == OPERAND_PSEUDO) {
+                    struct asm_instr *a = make_mov(curr->push.oper, r10);
+                    struct asm_instr *b = make_push(r10);
+
                     a->next = b;
                     curr = replace_instr(fn, prev, curr, a, b);
                 }
@@ -688,6 +824,17 @@ void emit_function(struct asm_function *fn, FILE *file)
             case ASM_ALLOCSTACK:
                 fprintf(file, "    subq     $%d, %%rsp\n", instr->allocate_stack.val);
                 break;
+            case ASM_DEALLOCSTACK:
+                fprintf(file, "    addq     $%d, %%rsp\n", instr->deallocate_stack.val);
+                break;
+            case ASM_PUSH:
+                fprintf(file, "    pushq    ");
+                write_operand(file, instr->push.oper, 64);
+                fprintf(file, "\n");
+                break;
+            case ASM_CALL:
+                fprintf(file, "   call     %s\n", instr->call.identifier);
+                break;
             case ASM_CDQ:
                 fprintf(file, "    cdq\n");
                 break;
@@ -700,7 +847,7 @@ void emit_function(struct asm_function *fn, FILE *file)
                 break;
             case ASM_UNARY:
                 fprintf(file, "    %s     ", asm_op_str(instr->unary.op));
-                write_operand(file, instr->unary.dst, 32);
+                write_operand(file, instr->unary.oper, 32);
                 fprintf(file, "\n");
                 break;
             case ASM_BINARY:
@@ -724,9 +871,9 @@ void emit_function(struct asm_function *fn, FILE *file)
                 break;
             case ASM_CMP:
                 fprintf(file, "    cmpl     ");
-                write_operand(file, instr->cmp.oper1, 32);
+                write_operand(file, instr->cmp.lhs, 32);
                 fprintf(file, ", ");
-                write_operand(file, instr->cmp.oper2, 32);
+                write_operand(file, instr->cmp.rhs, 32);
                 fprintf(file, "\n");
                 break;
             case ASM_JMP: {
