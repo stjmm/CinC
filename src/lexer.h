@@ -93,6 +93,7 @@ struct token {
     const char *start;      // Pointer to original source string
     int length;
 
+    const char *filename;
     int line;
     const char *line_start; // Line start for current token 
 };

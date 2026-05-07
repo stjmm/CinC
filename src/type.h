@@ -35,6 +35,7 @@ struct type {
 struct type *type_void(void);
 struct type *type_int(void);
 struct type *type_function(struct type *return_type, struct decl *params, int param_count, bool has_prototype);
+struct type *type_composite(struct type *a, struct type *b);
 
 bool type_is_void(struct type *ty);
 bool type_is_int(struct type *ty);

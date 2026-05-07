@@ -35,7 +35,7 @@ pass() {
 
 fail() {
     echo -e "${RED}FAIL${ENDCOLOR}: $1"
-    [ $# -gt 1 ] echo "     $2"
+    [ $# -gt 1 ] && echo "     $2"
     ((FAIL++))
 }
 

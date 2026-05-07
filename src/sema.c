@@ -34,7 +34,7 @@ static void error(struct token *tok, const char *message)
 {
     int col = (int)(tok->start - tok->line_start);
 
-    fprintf(stderr, "Error at line %d, col %d: %s\n", tok->line, col, message);
+    fprintf(stderr, "%s: Error at line %d, col %d: %s\n", tok->filename, tok->line, col, message);
 
     const char *line_end = tok->line_start;
     while (*line_end != '\0' && *line_end != '\n')
@@ -184,6 +184,7 @@ static enum linkage compute_linkage(struct decl *d, struct symbol *prior_visible
 
 static enum storage_duration compute_storage_duration(struct decl *d)
 {
+    // Function is always static
     if (d->kind == DECL_FUNCTION)
         return SD_STATIC;
 
@@ -271,10 +272,12 @@ static void validate_function_params(struct decl *fn)
         if (p->storage_class != SC_NONE && p->storage_class != SC_REGISTER)
             error(&p->name, "Only 'register' storage class can be used as a parameter");
 
-        if (hashmap_get(&params, p->name.start, p->name.length))
-            error(&p->name, "Duplicate parameter definiton");
+        if (p->name.length > 0 && p->name.start != NULL) {
+            if (hashmap_get(&params, p->name.start, p->name.length))
+                error(&p->name, "Duplicate parameter definiton");
 
-        hashmap_set(&params, p->name.start, p->name.length, p);
+            hashmap_set(&params, p->name.start, p->name.length, p);
+        }
     }
 
     hashmap_free(&params);
@@ -284,7 +287,7 @@ static void validate_decl(struct decl *d)
 {
     if (is_file_scope() &&
         (d->storage_class == SC_AUTO || d->storage_class == SC_REGISTER)) {
-        error(&d->name, "Illegal storage at file-scope");
+        error(&d->name, "Illegal storage class at file scope");
     }
 
     // TODO: Check typedef stuff
@@ -292,9 +295,10 @@ static void validate_decl(struct decl *d)
     if (d->kind == DECL_FUNCTION) {
         validate_function_params(d);
 
-        if (!is_file_scope() && d->storage_class != SC_NONE &&
+        if (!is_file_scope() && 
+            d->storage_class != SC_NONE &&
             d->storage_class != SC_EXTERN) {
-            error(&d->name, "Block-scope function declarations may only use extern");
+            error(&d->name, "Block-scope function declaration may only use extern");
         }
 
         if (d->func.body && d->storage_class != SC_NONE &&
@@ -309,8 +313,7 @@ static void validate_decl(struct decl *d)
         error(&d->name, "Object cannot have type void");
 
     if (!is_file_scope() && d->storage_class == SC_EXTERN && d->var.init)
-        error(&d->name, "Declaration of block-scope identifier with external linkage"
-                        "cannot have an initializer");
+        error(&d->name, "Block-scope extern declaration cannot have an initializer");
 }
 
 static struct symbol *merge_symbol(struct decl *d, struct symbol *sym,
@@ -322,7 +325,8 @@ static struct symbol *merge_symbol(struct decl *d, struct symbol *sym,
     if (!types_compatible(d->ty, sym->ty)) {
         error(&d->name, "Confilcting declaration types");
     } else {
-        // Composite type
+        sym->ty = type_composite(sym->ty, d->ty);
+        d->ty = sym->ty;
     }
 
     if (sym->defined && d->is_definition)
@@ -351,6 +355,7 @@ static struct symbol *declare_symbol(struct decl *d)
     d->linkage = compute_linkage(d, prior_visible);
     d->storage_duration = compute_storage_duration(d);
     classify_definition(d);
+
 
     struct symbol *prior_current = scope_lookup_current(current_scope,
             d->name.start, d->name.length);
@@ -595,8 +600,13 @@ static void analyze_decl_list(struct decl *decls)
         validate_decl(d);
         declare_symbol(d);
 
-        if (d->kind == DECL_VAR && d->var.init)
+        if (d->kind == DECL_VAR && d->var.init) {
             analyze_expr(d->var.init);
+
+            if (d->storage_duration == SD_STATIC &&
+                d->var.init && d->var.init->kind != EXPR_INT_LITERAL)
+                error(&d->name, "Initializer for object with static storage must be constant");
+        }
     }
 }
 

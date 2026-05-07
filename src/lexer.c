@@ -13,6 +13,8 @@ struct lexer {
 
 static struct lexer lexer_state;
 
+extern const char *current_filename;
+
 void lexer_init(const char *source)
 {
     lexer_state.start = source;
@@ -77,6 +79,7 @@ static struct token make_token(enum token_type type)
     tok.type = type;
     tok.line = lexer_state.line;
     tok.line_start = lexer_state.line_start;
+    tok.filename = current_filename;
     return tok;
 }
 

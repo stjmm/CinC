@@ -60,7 +60,7 @@ static void error(struct token *tok, const char *message)
 
     int col = (int)(tok->start - tok->line_start);
 
-    fprintf(stderr, "Error at line %d, col %d: %s\n", tok->line, col, message);
+    fprintf(stderr, "%s: Error at line %d, col %d: %s\n", tok->filename, tok->line, col, message);
 
     const char *line_end = tok->line_start;
     while (*line_end != '\0' && *line_end != '\n')

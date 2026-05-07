@@ -97,3 +97,17 @@ bool types_compatible(struct type *a, struct type *b)
 
     return false;
 }
+
+struct type *type_composite(struct type *a, struct type *b)
+{
+    if (!type_is_function(a) || !type_is_function(b))
+        return a;
+
+    if (!a->func.has_prototype && b->func.has_prototype)
+        return b;
+
+    if (a->func.has_prototype && !b->func.has_prototype)
+        return a;
+
+    return a;
+}

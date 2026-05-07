@@ -16,6 +16,9 @@ static char *opt_o;
 static char *input_files[64];
 static int input_file_count = 0;
 
+const char *current_filename;
+bool had_error = false;
+
 static char *read_file(const char *filename)
 {
     FILE *file = fopen(filename, "r");
@@ -126,27 +129,35 @@ static void parse_args(int argc, char **argv)
     }
 }
 
-static void compile_to_asm(const char *filename, const char *out_file)
+static bool compile_to_asm(const char *filename, const char *out_file)
 {
+    current_filename = filename;
     char *source = read_file(filename);
 
     struct ast_program *root = parse_translation_unit(source);
-    if (!root)
-        exit(1);
+    if (!root) {
+        had_error = true;
+        return false;
+    }
 
     root = sema_analysis(root);
-    if (!root)
-        exit(1);
+    if (!root) {
+        had_error = true;
+        return false;
+    }
 
     struct ir_program *program = build_ir(root);
-    if (!program)
-        exit(1);
+    if (!program) {
+        had_error = true;
+        return false;
+    }
 
     FILE *out_f = fopen(out_file, "w");
     emit_x86(program, out_f);
 
     fclose(out_f);
     free(source);
+    return true;
 }
 
 static char *compile_file(const char *filename)
@@ -154,7 +165,12 @@ static char *compile_file(const char *filename)
     if (opt_S) {
         char *asm_file = opt_o ? strdup(opt_o) : replace_ext(filename, ".s");
 
-        compile_to_asm(filename, asm_file);
+        if (!compile_to_asm(filename, asm_file)) {
+            remove(asm_file);
+            free(asm_file);
+            return NULL;
+        }
+
         return asm_file;
     }
 
@@ -164,7 +180,12 @@ static char *compile_file(const char *filename)
         ? strdup(opt_o)
         : replace_ext(filename, ".o");
 
-    compile_to_asm(filename, asm_file);
+    if (!compile_to_asm(filename, asm_file)) {
+        remove(asm_file);
+        free(asm_file);
+        free(obj_file);
+        return NULL;
+    }
 
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "cc -c %s -o %s", asm_file, obj_file);
@@ -203,9 +224,20 @@ int main(int argc, char **argv)
     for (int i = 0; i < input_file_count; i++)
         objects[i] = compile_file(input_files[i]);
 
+    if (had_error) {
+        for (int i = 0; i < input_file_count; i++) { 
+            if (objects[i])
+                remove(objects[i]);
+        }
+
+        return 1;
+    }
+
     if (!opt_S && !opt_c) {
         link_files(objects);
         for (int i = 0; i <  input_file_count; i++)
             remove(objects[i]);
     }
+
+    return 0;
 }
