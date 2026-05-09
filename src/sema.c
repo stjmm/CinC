@@ -27,6 +27,10 @@ static hash_map labels;
 static hash_map external_symbols;
 static hash_map internal_symbols;
 
+// TODO: Change this shit
+struct symbol *all_symbols = NULL;
+static struct symbol *all_symbols_tail = NULL;
+
 static int unique_counter;
 static bool had_error;
 
@@ -102,6 +106,20 @@ static struct symbol *scope_lookup_visible(struct scope *s, const char *name, in
     return NULL;
 }
 
+static void append_to_all_symbols(struct symbol *sym)
+{
+    sym->next = NULL;
+
+    if (!all_symbols) {
+        all_symbols = sym;
+        all_symbols_tail = sym;
+        return;
+    }
+
+    all_symbols_tail->next = sym;
+    all_symbols_tail = sym;
+}
+
 static struct symbol *symbol_new(struct decl *d)
 {
     struct symbol *sym = calloc(1, sizeof(struct symbol));
@@ -119,6 +137,8 @@ static struct symbol *symbol_new(struct decl *d)
         sym->ir_name = token_to_cstr(d->name);
     else
         sym->ir_name = make_unique(d->name.start, d->name.length);
+
+    append_to_all_symbols(sym);
 
     return sym;
 }
@@ -591,6 +611,26 @@ static void require_int_expression(struct expr *expr, const char *message)
 
 static void analyze_stmt(struct stmt *stmt);
 
+static void record_static_initializer(struct decl *d)
+{
+    if (d->kind != DECL_VAR)
+        return;
+
+    if (d->storage_duration != SD_STATIC)
+        return;
+
+    if (!d->var.init)
+        return;
+
+    if (d->var.init->kind != EXPR_INT_LITERAL) {
+        error(&d->name, "Initializer for object with static storage must be constant");
+        return;
+    }
+
+    d->sym->has_static_init = true;
+    d->sym->static_init = d->var.init->int_value;
+}
+
 static void analyze_decl_list(struct decl *decls)
 {
     if (!decls)
@@ -602,10 +642,7 @@ static void analyze_decl_list(struct decl *decls)
 
         if (d->kind == DECL_VAR && d->var.init) {
             analyze_expr(d->var.init);
-
-            if (d->storage_duration == SD_STATIC &&
-                d->var.init && d->var.init->kind != EXPR_INT_LITERAL)
-                error(&d->name, "Initializer for object with static storage must be constant");
+            record_static_initializer(d);
         }
     }
 }
@@ -1261,6 +1298,9 @@ struct ast_program *sema_analysis(struct ast_program *program)
     unique_counter = 0;
     had_error = false;
 
+    all_symbols = NULL;
+    all_symbols_tail = NULL;
+
     hashmap_init(&internal_symbols);
     hashmap_init(&external_symbols);
 
@@ -1275,8 +1315,10 @@ struct ast_program *sema_analysis(struct ast_program *program)
         validate_decl(d);
         declare_symbol(d);
 
-        if (d->kind == DECL_VAR && d->var.init)
+        if (d->kind == DECL_VAR && d->var.init) {
             analyze_expr(d->var.init);
+            record_static_initializer(d);
+        }
 
         if (d->kind == DECL_FUNCTION && d->func.body)
             analyze_function_body(d);

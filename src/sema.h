@@ -25,7 +25,12 @@ struct symbol {
     bool defined;
     bool tentative;
 
+    bool has_static_init;
+    long static_init;
+
     char *ir_name;
+
+    struct symbol *next;
 };
 
 struct case_entry {

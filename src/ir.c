@@ -10,6 +10,7 @@
 #include "base/hash_map.h"
 
 static struct ir_function *current_function;
+extern struct symbol *all_symbols; // From sema (for now simple) TODO: Change this
 
 /*
  * One per function.
@@ -139,6 +140,17 @@ static void append_function(struct ir_program *program, struct ir_function *fn)
         tail = &(*tail)->next;
 
     *tail = fn;
+}
+
+static void append_static_variable(struct ir_program *program,
+                                struct ir_static_variable *var)
+{
+    struct ir_static_variable **tail = &program->static_vars;
+
+    while (*tail)
+        tail = &(*tail)->next;
+
+    *tail = var;
 }
 
 static void append_param(struct ir_function *fn, struct ir_param *param)
@@ -454,11 +466,11 @@ static struct ir_value emit_expr(struct expr *expr)
 static void emit_decl_list(struct decl *decls)
 {
     for (struct decl *decl = decls; decl; decl = decl->next) {
-        if (decl->kind == DECL_FUNCTION) {
+        if (decl->kind != DECL_VAR) {
             continue;
         }
 
-        if (decl->kind != DECL_VAR)
+        if (decl->storage_duration != SD_AUTO)
             continue;
 
         if (decl->var.init) {
@@ -681,6 +693,27 @@ static void emit_block_item(struct block_item *item)
         emit_stmt(item->stmt);
 }
 
+static void emit_static_variables(struct ir_program *ir)
+{
+    for (struct symbol *sym = all_symbols; sym; sym = sym->next) {
+        if (sym->kind != SYM_OBJECT)
+            continue;
+
+        if (sym->storage_duration != SD_STATIC)
+            continue;
+
+        if (!sym->defined && !sym->tentative)
+            continue;
+
+        struct ir_static_variable *var = calloc(1, sizeof(struct ir_static_variable));
+        var->name = sym->ir_name;
+        var->linkage = sym->linkage;
+        var->init = sym->has_static_init ? sym->static_init : 0;
+
+        append_static_variable(ir, var);
+    }
+}
+
 static void emit_function_params(struct ir_function *fn, struct decl *params)
 {
     for (struct decl *param = params; param; param = param->next) {
@@ -749,6 +782,8 @@ struct ir_program *build_ir(struct ast_program *program)
             append_function(ir, fn);
         }
     }
+
+    emit_static_variables(ir);
 
     return ir;
 }

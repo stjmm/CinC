@@ -136,8 +136,18 @@ struct ir_function {
     struct ir_function *next;
 };
 
+struct ir_static_variable {
+    const char *name;
+    enum linkage linkage;
+
+    int init; // Later ir_static_init
+
+    struct ir_static_variable *next;
+};
+
 struct ir_program {
     struct ir_function *functions;
+    struct ir_static_variable *static_vars;
 };
 
 struct ir_program *build_ir(struct ast_program *program);
