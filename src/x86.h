@@ -24,7 +24,8 @@ enum operand_type {
     OPERAND_IMM,
     OPERAND_REG,
     OPERAND_PSEUDO,
-    OPERAND_STACK
+    OPERAND_STACK,
+    OPERAND_DATA
 };
 
 struct operand {
@@ -37,9 +38,9 @@ struct operand {
 
         int stack;      // Location on the stack (eg. -4(%rbp))
 
-        struct {
-            const char *name;
-        } pseudo;     // Refers to temporary variables produced in TACKY
+        const char *data;
+
+        const char *pseudo;
     };
 };
 
@@ -156,10 +157,20 @@ struct asm_instr {
     };
 };
 
-/* ASM Function/Program */
+/* ASM Translation Unit */
+
+struct asm_static_variable {
+    const char *name;
+    bool global;
+    long init;
+
+    struct asm_static_variable *next;
+};
 
 struct asm_function {
     const char *name;
+    bool global;
+
     struct asm_function *next;
 
     struct asm_instr *first;
@@ -170,6 +181,7 @@ struct asm_function {
 
 struct asm_program {
     struct asm_function *functions;
+    struct asm_static_variable *static_vars;
 };
 
 void emit_x86(struct ir_program *ir, FILE *file);

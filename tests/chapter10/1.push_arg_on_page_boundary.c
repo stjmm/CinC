@@ -1,7 +1,3 @@
-#ifdef SUPPRESS_WARNINGS
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#endif
-
 // use an int that's within 8 bytes of a page boundary as a stack argument
 // this makes sure we don't use 8-byte push to push 4-byte values in memory
 // NOTE: this doesn't test what it's supposed to on macOS, only on Linux;

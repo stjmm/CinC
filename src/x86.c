@@ -17,11 +17,14 @@
 #include <stdarg.h>
 
 #include "x86.h"
+#include "ast.h"
 #include "ir.h"
 #include "base/hash_map.h"
 
 #define STACK_SLOT_SIZE 4
 #define ARG_REG_COUNT 6
+
+static struct ir_static_variable *current_static_vars;
 
 static const enum reg arg_regs[] = {
     REG_DI,
@@ -88,7 +91,12 @@ static struct operand make_stack(int offset)
 
 static struct operand make_pseudo(const char *name)
 {
-    return (struct operand){ .type = OPERAND_PSEUDO, .pseudo.name = name };
+    return (struct operand){ .type = OPERAND_PSEUDO, .pseudo = name };
+}
+
+static struct operand make_data(const char *name)
+{
+    return (struct operand){ .type = OPERAND_DATA, .data = name };
 }
 
 static struct asm_instr *new_instr(enum asm_instr_type type)
@@ -193,13 +201,31 @@ static struct asm_instr *make_push(struct operand oper)
 static struct asm_instr *make_ret(void)   { return new_instr(ASM_RET); }
 static struct asm_instr *make_cdq(void)   { return new_instr(ASM_CDQ); }
 
+static bool is_static_var_name(const char *name)
+{
+    for (struct ir_static_variable *var = current_static_vars; var; var = var->next)  {
+        if (strcmp(var->name, name) == 0)
+            return true;
+    }
+
+    return false;
+}
+
+static bool is_memory_operand(struct operand op)
+{
+    return op.type == OPERAND_STACK || op.type == OPERAND_DATA;
+}
+
 // Convert 'ir_val' to ASM operand (immediate or pseudo)
 static struct operand convert_val(struct ir_value val)
 {
     if (val.kind == IR_VALUE_CONSTANT)
         return make_imm(val.constant);
-    else
-        return make_pseudo(val.name);
+
+    if (is_static_var_name(val.name))
+        return make_data(val.name);
+
+    return make_pseudo(val.name);
 }
 
 static void append_instr(struct asm_function *fn, struct asm_instr *instr)
@@ -209,6 +235,16 @@ static void append_instr(struct asm_function *fn, struct asm_instr *instr)
     else
         fn->last->next = instr;
     fn->last = instr;
+}
+
+static void append_asm_static_var(struct asm_program *program, struct asm_static_variable *var)
+{
+    struct asm_static_variable **tail = &program->static_vars;
+
+    while (*tail)
+        tail = &(*tail)->next;
+
+    *tail = var;
 }
 
 static struct asm_instr *replace_instr(struct asm_function *fn,
@@ -456,6 +492,11 @@ static struct asm_function *lower_ir_function(struct ir_function *ir_fn)
     struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
     asm_fn->name = ir_fn->name;
 
+    if (ir_fn->linkage == LINK_EXTERNAL)
+        asm_fn->global = true;
+    else
+        asm_fn->global = false;
+
     lower_ir_params(asm_fn, ir_fn);
 
     for (struct ir_instr *i = ir_fn->first; i != NULL; i = i->next) {
@@ -465,12 +506,30 @@ static struct asm_function *lower_ir_function(struct ir_function *ir_fn)
     return asm_fn;
 }
 
+static struct asm_static_variable *lower_ir_static_variable(struct ir_static_variable *ir_var)
+{
+    struct asm_static_variable *asm_var = calloc(1, sizeof(*asm_var));
+
+    asm_var->name = ir_var->name;
+    asm_var->global = ir_var->linkage == LINK_EXTERNAL;
+    asm_var->init = ir_var->init;
+
+    return asm_var;
+}
+
 static struct asm_program *lower_ir_program(struct ir_program *ir)
 {
     struct asm_program *program = calloc(1, sizeof(struct asm_program));
 
+    current_static_vars = ir->static_vars;
+
     struct asm_function *head = NULL;
     struct asm_function *tail = NULL;
+
+    for (struct ir_static_variable *v = ir->static_vars; v; v = v->next) {
+        struct asm_static_variable *asm_var = lower_ir_static_variable(v);
+        append_asm_static_var(program, asm_var);
+    }
 
     for (struct ir_function *ir_fn = ir->functions; ir_fn; ir_fn = ir_fn->next) {
         struct asm_function *asm_fn = lower_ir_function(ir_fn);
@@ -520,7 +579,7 @@ static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
     if (oper->type != OPERAND_PSEUDO)
         return;
 
-    int offset = pseudo_map_get_or_insert(pm, oper->pseudo.name);
+    int offset = pseudo_map_get_or_insert(pm, oper->pseudo);
     oper->type  = OPERAND_STACK;
     oper->stack = offset;
 }
@@ -626,8 +685,8 @@ static void asm_phase3(struct asm_function *fn)
             
             // mov mem, mem -> movl mem, r10d / movl r10d, mem
             case ASM_MOV: {
-                bool src_mem = curr->mov.src.type == OPERAND_STACK;
-                bool dst_mem = curr->mov.dst.type == OPERAND_STACK;
+                bool src_mem = is_memory_operand(curr->mov.src);
+                bool dst_mem = is_memory_operand(curr->mov.dst);
 
                 if (src_mem && dst_mem) {
                     struct asm_instr *a = make_mov(curr->mov.src, r10);
@@ -640,8 +699,8 @@ static void asm_phase3(struct asm_function *fn)
             }
 
             case ASM_BINARY: {
-                bool src_mem = curr->binary.src.type == OPERAND_STACK;
-                bool dst_mem = curr->binary.dst.type == OPERAND_STACK;
+                bool src_mem = is_memory_operand(curr->binary.src);
+                bool dst_mem = is_memory_operand(curr->binary.dst);
                 bool is_mul = curr->binary.op == ASM_IMUL;
                 bool is_shift = curr->binary.op == ASM_SHL || curr->binary.op == ASM_SHR;
 
@@ -681,8 +740,8 @@ static void asm_phase3(struct asm_function *fn)
                 break;
             }
             case ASM_CMP: {
-                if (curr->cmp.lhs.type == OPERAND_STACK &&
-                    curr->cmp.rhs.type == OPERAND_STACK) {
+                if (is_memory_operand(curr->cmp.lhs) &&
+                    is_memory_operand(curr->cmp.rhs)) {
                     struct asm_instr *a = make_mov(curr->cmp.lhs, r10);
                     struct asm_instr *b = make_cmp(r10, curr->cmp.rhs);
                     a->next = b;
@@ -697,7 +756,7 @@ static void asm_phase3(struct asm_function *fn)
             }
             
             case ASM_PUSH: {
-                if (curr->push.oper.type == OPERAND_STACK) {
+                if (is_memory_operand(curr->push.oper)) {
                     struct asm_instr *a = make_mov(curr->push.oper, r10);
                     struct asm_instr *b = make_push(r10);
 
@@ -809,14 +868,37 @@ static void write_operand(FILE *file, struct operand op, int reg_size)
         case OPERAND_IMM:
             fprintf(file, "$%d", op.imm);
             break;
+        case OPERAND_DATA:
+            fprintf(file, "%s(%%rip)", op.data);
+            break;
         default:
             break;
     }
 }
 
-void emit_function(struct asm_function *fn, FILE *file)
+static void emit_static_variable(struct asm_static_variable *var, FILE *file)
 {
-    fprintf(file, "    .globl %s\n", fn->name);
+    if (var->global)
+        fprintf(file, "    .globl %s\n", var->name);
+
+    if (var->init == 0) {
+        fprintf(file, "    .bss\n");
+        fprintf(file, "    .align 4\n");
+        fprintf(file, "%s:\n", var->name);
+        fprintf(file, "    .zero 4\n");
+    } else {
+        fprintf(file, "    .data\n");
+        fprintf(file, "    .align 4\n");
+        fprintf(file, "%s:\n", var->name);
+        fprintf(file, "    .long %lu\n", var->init);
+    }
+}
+
+static void emit_function(struct asm_function *fn, FILE *file)
+{
+    if (fn->global)
+        fprintf(file, "    .globl %s\n", fn->name);
+    fprintf(file, "    .text\n");
     fprintf(file, "%s:\n", fn->name);
     fprintf(file, "    pushq    %%rbp\n");
     fprintf(file, "    movq     %%rsp, %%rbp\n");
@@ -913,6 +995,11 @@ void emit_x86(struct ir_program *ir, FILE *file)
     asm_phase2(program);
     for (struct asm_function *fn = program->functions; fn; fn = fn->next)
         asm_phase3(fn);
+
+
+    for (struct asm_static_variable *var = program->static_vars; var; var = var->next)
+        emit_static_variable(var, file);
+
 
     for (struct asm_function *fn = program->functions; fn; fn = fn->next) {
         emit_function(fn, file);
