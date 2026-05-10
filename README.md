@@ -1,3 +1,19 @@
-# CinC - My small C compiler written in C
+# CinC
 
-Done following the book "Writing a C Compiler" by Nora Sandler
+A small C compiler written in C.
+
+## Features
+
+- C11 subset
+- `int` and `void` types
+- Control flow statements
+- Functions and function calls
+- Multiple translation units
+- Uses GCC for assembling and linking
+
+## Build
+
+Debug build:
+
+```sh
+make
