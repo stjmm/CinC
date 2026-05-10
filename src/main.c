@@ -13,6 +13,9 @@ static bool opt_c;
 static bool opt_S;
 static char *opt_o;
 
+static bool opt_lex;
+static bool opt_parse;
+
 static char *input_files[64];
 static int input_file_count = 0;
 
@@ -79,9 +82,8 @@ static void usage(const char *prog)
             "   -c          Compile and assemble but don't link (.o)\n"
             "   -o <file>   Place the output into <file>\n"
             "Compiler Debug Options:\n"
-            "   --lex       Debug: dump tokens\n"
-            "   --parse     Debug: dump AST after parsing\n"
-            "   --validate  Debug: dump AST after semantical analysis\n"
+            "   --lex       Debug: print tokens\n"
+            "   --parse     Debug: pretty-print AST after parsing and sema\n"
             "   --help      This message\n",
             prog);
     exit(1);
@@ -97,6 +99,16 @@ static void parse_args(int argc, char **argv)
 
         if (!strcmp(arg, "--help")) {
             usage(argv[0]);
+            continue;
+        }
+
+        if (!strcmp(arg, "--lex")) {
+            opt_lex = true;
+            continue;
+        }
+
+        if (!strcmp(arg, "--parse")) {
+            opt_parse = true;
             continue;
         }
 
@@ -215,9 +227,48 @@ static void link_files(char **objects)
     run_cmd(cmd);
 }
 
+static void debug_file(const char *filename)
+{
+    current_filename = filename;
+
+    char *source = read_file(filename);
+
+    const char *token_kind_strings[] = {
+#define X(tok_name) [tok_name] = #tok_name,
+        TOKEN_LIST
+#undef X
+    };
+
+    if (opt_lex) {
+        lexer_init(source);
+
+        struct token tok = lexer_next_token();
+        while (tok.type != TOKEN_EOF) {
+            printf("%s\n", token_kind_strings[tok.type]);
+            tok = lexer_next_token();
+        }
+
+        exit(0);
+    }
+
+    if (opt_parse) {
+        struct ast_program *program = parse_translation_unit(source);
+        program = sema_analysis(program);
+
+        ast_print(program);
+
+        exit(0);
+    }
+}
+
 int main(int argc, char **argv)
 {
     parse_args(argc, argv);
+
+    if (opt_lex || opt_parse) {
+        for (int i = 0; i < input_file_count; i++)
+            debug_file(input_files[i]);
+    }
 
     char *objects[64];
 
