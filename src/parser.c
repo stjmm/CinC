@@ -791,13 +791,13 @@ static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
         struct decl *d = decl_new(DECL_FUNCTION, name);
         d->storage_class = specs->storage_class;
         d->func.params = params_head;
-        d->ty = type_function(specs->base_type, params_head, param_count, has_prototype);
+        d->type = type_function(specs->base_type, params_head, param_count, has_prototype);
         return d;
     }
 
-    struct decl *d = decl_new(DECL_VAR, name);
+    struct decl *d = decl_new(DECL_OBJECT, name);
     d->storage_class = specs->storage_class;
-    d->ty = specs->base_type;
+    d->type = specs->base_type;
 
     return d;
 }
@@ -814,8 +814,8 @@ static struct decl *parse_init_declarator(struct decl_specs *specs)
             return NULL;
         }
 
-        d->var.init = parse_expression(PREC_ASSIGNMENT);
-        if (!d->var.init)
+        d->object.init = parse_expression(PREC_ASSIGNMENT);
+        if (!d->object.init)
             return NULL;
     }
 

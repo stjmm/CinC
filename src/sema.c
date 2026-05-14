@@ -126,7 +126,7 @@ static struct symbol *symbol_new(struct decl *d)
     sym->kind = d->kind == DECL_FUNCTION ? SYM_FUNCTION : SYM_OBJECT;
     sym->name = d->name.start;
     sym->name_len = d->name.length;
-    sym->ty = d->ty;
+    sym->ty = d->type;
     sym->decl = d;
     sym->linkage = d->linkage;
     sym->storage_duration = d->storage_duration;
@@ -246,7 +246,7 @@ static void classify_definition(struct decl *d)
      *   extern int x; declaration
      */
     if (is_file_scope()) {
-        if (d->var.init) {
+        if (d->object.init) {
             d->is_definition = true;
             return;
         }
@@ -268,7 +268,7 @@ static void classify_definition(struct decl *d)
 static void validate_for_init_decls(struct decl *decls)
 {
     for (struct decl *d = decls; d; d = d->next) {
-        if (d->kind != DECL_VAR) {
+        if (d->kind != DECL_OBJECT) {
             error(&d->name, "For-loop init declaration must declare an object");
             continue;
         }
@@ -286,7 +286,7 @@ static void validate_function_params(struct decl *fn)
     hashmap_init(&params);
 
     for (struct decl *p = fn->func.params; p; p = p->next) {
-        if (type_is_void(p->ty))
+        if (type_is_void(p->type))
             error(&p->name, "Function parameter cannot be type void");
 
         if (p->storage_class != SC_NONE && p->storage_class != SC_REGISTER)
@@ -329,10 +329,10 @@ static void validate_decl(struct decl *d)
         return;
     }
 
-    if (type_is_void(d->ty))
+    if (type_is_void(d->type))
         error(&d->name, "Object cannot have type void");
 
-    if (!is_file_scope() && d->storage_class == SC_EXTERN && d->var.init)
+    if (!is_file_scope() && d->storage_class == SC_EXTERN && d->object.init)
         error(&d->name, "Block-scope extern declaration cannot have an initializer");
 }
 
@@ -342,11 +342,11 @@ static struct symbol *merge_symbol(struct decl *d, struct symbol *sym,
     if (d->linkage != sym->linkage)
         error(&d->name, "Conflicting linkage for declaration");
 
-    if (!types_compatible(d->ty, sym->ty)) {
+    if (!types_compatible(d->type, sym->ty)) {
         error(&d->name, "Confilcting declaration types");
     } else {
-        sym->ty = type_composite(sym->ty, d->ty);
-        d->ty = sym->ty;
+        sym->ty = type_composite(sym->ty, d->type);
+        d->type = sym->ty;
     }
 
     if (sym->defined && d->is_definition)
@@ -471,7 +471,7 @@ static struct symbol *declare_symbol(struct decl *d)
 
 static void check_call_args(struct expr *expr)
 {
-    struct type *fn_ty = expr->call.callee->ty;
+    struct type *fn_ty = expr->call.callee->type;
 
     if (!fn_ty->func.has_prototype)
         return;
@@ -489,7 +489,7 @@ static void check_call_args(struct expr *expr)
     struct expr *arg = expr->call.args;
     struct decl *param = fn_ty->func.params;
     for (; arg && param; arg = arg->next, param = param->next) {
-        if (!types_compatible(arg->ty, param->ty))
+        if (!types_compatible(arg->type, param->type))
             error(&arg->tok, "Argument type does not match parameter type");
     }
 }
@@ -501,7 +501,7 @@ static void analyze_expr(struct expr *expr)
 
     switch (expr->kind) {
         case EXPR_INT_LITERAL:
-            expr->ty = type_int();
+            expr->type = type_int();
             expr->is_lvalue = false;
             break;
 
@@ -511,13 +511,13 @@ static void analyze_expr(struct expr *expr)
 
             if (!sym) {
                 error(&expr->tok, "Undeclared identifier");
-                expr->ty = type_int();
+                expr->type = type_int();
                 expr->is_lvalue = false;
                 return;
             }
 
             expr->identifier.sym = sym;
-            expr->ty = sym->ty;
+            expr->type = sym->ty;
             expr->is_lvalue = sym->kind == SYM_OBJECT;
             break;
         }
@@ -529,11 +529,11 @@ static void analyze_expr(struct expr *expr)
             if (!expr->assignment.lvalue->is_lvalue)
                 error(&expr->assignment.lvalue->tok, "Left side is not assignable");
 
-            if (!types_compatible(expr->assignment.lvalue->ty,
-                        expr->assignment.rvalue->ty))
+            if (!types_compatible(expr->assignment.lvalue->type,
+                        expr->assignment.rvalue->type))
                 error(&expr->tok, "Assignment types are not compatible");
 
-            expr->ty = expr->assignment.lvalue->ty;
+            expr->type = expr->assignment.lvalue->type;
             expr->is_lvalue = false;
             break;
         }
@@ -545,13 +545,13 @@ static void analyze_expr(struct expr *expr)
             if (!expr->unary.operand->is_lvalue)
                 error(&expr->tok, "Operand of increment/decrement must be an lvalue");
 
-            expr->ty = expr->unary.operand->ty;
+            expr->type = expr->unary.operand->type;
             expr->is_lvalue = false;
             break;
 
         case EXPR_UNARY:
             analyze_expr(expr->unary.operand);
-            expr->ty = expr->unary.operand->ty;
+            expr->type = expr->unary.operand->type;
             expr->is_lvalue = false;
             break;
 
@@ -559,11 +559,11 @@ static void analyze_expr(struct expr *expr)
             analyze_expr(expr->binary.left);
             analyze_expr(expr->binary.right);
 
-            if (!type_is_int(expr->binary.left->ty) || 
-                !type_is_int(expr->binary.right->ty))
+            if (!type_is_int(expr->binary.left->type) || 
+                !type_is_int(expr->binary.right->type))
                 error(&expr->tok, "For now we only support int binary ops");
             
-            expr->ty = expr->binary.left->ty;
+            expr->type = expr->binary.left->type;
             expr->is_lvalue = false;
             break;
 
@@ -572,13 +572,13 @@ static void analyze_expr(struct expr *expr)
             analyze_expr(expr->conditional.then_expr);
             analyze_expr(expr->conditional.else_expr);
 
-            if (!types_compatible(expr->conditional.then_expr->ty,
-                                  expr->conditional.else_expr->ty)) {
+            if (!types_compatible(expr->conditional.then_expr->type,
+                                  expr->conditional.else_expr->type)) {
                 error(&expr->tok,
                       "Conditional expression arms have incompatible types");
             }
 
-            expr->ty = expr->conditional.then_expr->ty;
+            expr->type = expr->conditional.then_expr->type;
             expr->is_lvalue = false;
             break;
 
@@ -588,16 +588,16 @@ static void analyze_expr(struct expr *expr)
             for (struct expr *arg = expr->call.args; arg; arg = arg->next)
                 analyze_expr(arg);
 
-            if (!type_is_function(expr->call.callee->ty)) {
+            if (!type_is_function(expr->call.callee->type)) {
                 error(&expr->call.callee->tok, "Called object is not a function");
-                expr->ty = type_int();
+                expr->type = type_int();
                 expr->is_lvalue = false;
                 return;
             }
 
             check_call_args(expr);
 
-            expr->ty = expr->call.callee->ty->func.return_type;
+            expr->type = expr->call.callee->type->func.return_type;
             expr->is_lvalue = false;
             break;
     }
@@ -605,7 +605,7 @@ static void analyze_expr(struct expr *expr)
 
 static void require_int_expression(struct expr *expr, const char *message)
 {
-    if (!type_is_int(expr->ty))
+    if (!type_is_int(expr->type))
         error(&expr->tok, message);
 }
 
@@ -613,22 +613,22 @@ static void analyze_stmt(struct stmt *stmt);
 
 static void record_static_initializer(struct decl *d)
 {
-    if (d->kind != DECL_VAR)
+    if (d->kind != DECL_OBJECT)
         return;
 
     if (d->storage_duration != SD_STATIC)
         return;
 
-    if (!d->var.init)
+    if (!d->object.init)
         return;
 
-    if (d->var.init->kind != EXPR_INT_LITERAL) {
+    if (d->object.init->kind != EXPR_INT_LITERAL) {
         error(&d->name, "Initializer for object with static storage must be constant");
         return;
     }
 
     d->sym->has_static_init = true;
-    d->sym->static_init = d->var.init->int_value;
+    d->sym->static_init = d->object.init->int_value;
 }
 
 static void analyze_decl_list(struct decl *decls)
@@ -640,8 +640,8 @@ static void analyze_decl_list(struct decl *decls)
         validate_decl(d);
         declare_symbol(d);
 
-        if (d->kind == DECL_VAR && d->var.init) {
-            analyze_expr(d->var.init);
+        if (d->kind == DECL_OBJECT && d->object.init) {
+            analyze_expr(d->object.init);
             record_static_initializer(d);
         }
     }
@@ -688,7 +688,7 @@ static void analyze_stmt(struct stmt *stmt)
             break;
 
         case STMT_RETURN: {
-            struct type *ret_ty = current_function->ty->func.return_type;
+            struct type *ret_ty = current_function->type->func.return_type;
 
             if (stmt->return_stmt.expr)
                 analyze_expr(stmt->return_stmt.expr);
@@ -699,7 +699,7 @@ static void analyze_stmt(struct stmt *stmt)
             } else {
                 if (!stmt->return_stmt.expr)
                     error(&stmt->tok, "Non-void function should return a value");
-                else if (!types_compatible(ret_ty, stmt->return_stmt.expr->ty))
+                else if (!types_compatible(ret_ty, stmt->return_stmt.expr->type))
                     error(&stmt->tok, "Return type mismatch");
             }
             break;
@@ -1315,8 +1315,8 @@ struct ast_program *sema_analysis(struct ast_program *program)
         validate_decl(d);
         declare_symbol(d);
 
-        if (d->kind == DECL_VAR && d->var.init) {
-            analyze_expr(d->var.init);
+        if (d->kind == DECL_OBJECT && d->object.init) {
+            analyze_expr(d->object.init);
             record_static_initializer(d);
         }
 

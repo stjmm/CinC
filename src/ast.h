@@ -49,7 +49,7 @@ struct expr {
     struct expr *next; // Arguments list and other expression lists
 
     // Filled by sema
-    struct type *ty;
+    struct type *type;
     bool is_lvalue;
 
     union {
@@ -91,7 +91,7 @@ struct expr {
 };
 
 enum decl_kind {
-    DECL_VAR,
+    DECL_OBJECT,
     DECL_FUNCTION
 };
 
@@ -121,7 +121,7 @@ struct decl {
     struct token name;
     struct decl *next;
 
-    struct type *ty;
+    struct type *type;
 
     enum storage_class storage_class;        // parsed
     enum linkage linkage;                    // sema-computed
@@ -137,7 +137,7 @@ struct decl {
     union {
         struct {
             struct expr *init;
-        } var;
+        } object;
 
         struct {
             struct decl *params;

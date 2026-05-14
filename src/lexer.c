@@ -49,8 +49,10 @@ static bool match(char expected)
 {
     if (is_at_end())
         return false;
+
     if (*lexer_state.current != expected)
         return false;
+
     lexer_state.current++;
     return true;
 }
@@ -87,7 +89,7 @@ static struct token make_token(enum token_type type)
  * Skips block comments
  * Returns next token after block comment
  */
-static struct token block_comment(void)
+static struct token skip_block_comment(void)
 {
     while (!is_at_end()) {
         if (peek() == '*' && peek_next() == '/') {
@@ -252,7 +254,7 @@ struct token lexer_next_token()
             else return make_token(TOKEN_STAR);
         case '/': 
             if (match('=')) return make_token(TOKEN_SLASH_EQUAL);
-            else if (match('*')) return block_comment();
+            else if (match('*')) return skip_block_comment();
             else return make_token(TOKEN_SLASH);
         case '%': 
             if (match('=')) return make_token(TOKEN_PERCENT_EQUAL);

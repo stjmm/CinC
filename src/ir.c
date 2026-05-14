@@ -29,12 +29,28 @@ static struct ir_value ir_constant(long c)
     };
 }
 
-static struct ir_value ir_name(const char *name)
+static struct ir_value ir_pseudo(const char *name)
 {
     return (struct ir_value) {
-        .kind = IR_VALUE_NAME,
+        .kind = IR_VALUE_PSEUDO,
         .name = name
     };
+}
+
+static struct ir_value ir_static(const char *name)
+{
+    return (struct ir_value) {
+        .kind = IR_VALUE_STATIC,
+        .name = name
+    };
+}
+
+static struct ir_value emit_object_value(struct symbol *sym)
+{
+    if (sym->storage_duration == SD_STATIC)
+        return ir_static(sym->ir_name);
+
+    return ir_pseudo(sym->ir_name);
 }
 
 static struct ir_value make_temp(void)
@@ -44,7 +60,7 @@ static struct ir_value make_temp(void)
 
     snprintf(buf, len + 1, "tmp.%d", next_temp_id++);
 
-    return ir_name(buf);
+    return ir_pseudo(buf);
 }
 
 static int make_label(void)
@@ -282,7 +298,7 @@ static struct ir_value emit_expr(struct expr *expr)
             return ir_constant(expr->int_value);
 
         case EXPR_IDENTIFIER:
-            return ir_name(expr->identifier.sym->ir_name);
+            return emit_object_value(expr->identifier.sym);
 
         case EXPR_UNARY: {
             struct ir_value src = emit_expr(expr->unary.operand);
@@ -363,7 +379,7 @@ static struct ir_value emit_expr(struct expr *expr)
         }
 
         case EXPR_ASSIGNMENT: {
-            struct ir_value lhs = ir_name(expr->assignment.lvalue->identifier.sym->ir_name);
+            struct ir_value lhs = emit_object_value(expr->assignment.lvalue->identifier.sym);
 
             if (expr->tok.type == TOKEN_EQUAL) {
                 struct ir_value rhs = emit_expr(expr->assignment.rvalue);
@@ -384,7 +400,7 @@ static struct ir_value emit_expr(struct expr *expr)
             bool is_incr = expr->tok.type == TOKEN_PLUS_PLUS;
 
             struct expr *lhs_expr = expr->unary.operand;
-            struct ir_value lhs = ir_name(lhs_expr->identifier.sym->ir_name);
+            struct ir_value lhs = emit_object_value(lhs_expr->identifier.sym);
 
             if (expr->kind == EXPR_POST) {
                 struct ir_value old_lhs = make_temp();
@@ -444,7 +460,7 @@ static struct ir_value emit_expr(struct expr *expr)
             for (struct expr *arg = expr->call.args; arg; arg = arg->next)
                 args[i++] = emit_expr(arg);
 
-            struct type *ret_ty = expr->call.callee->ty->func.return_type;
+            struct type *ret_ty = expr->call.callee->type->func.return_type;
 
             if (type_is_void(ret_ty)) {
                 emit_call(calle, args, arg_count, false, ir_constant(0));
@@ -466,16 +482,16 @@ static struct ir_value emit_expr(struct expr *expr)
 static void emit_decl_list(struct decl *decls)
 {
     for (struct decl *decl = decls; decl; decl = decl->next) {
-        if (decl->kind != DECL_VAR) {
+        if (decl->kind != DECL_OBJECT) {
             continue;
         }
 
         if (decl->storage_duration != SD_AUTO)
             continue;
 
-        if (decl->var.init) {
-            struct ir_value dst = ir_name(decl->sym->ir_name);
-            struct ir_value src = emit_expr(decl->var.init);
+        if (decl->object.init) {
+            struct ir_value dst = ir_pseudo(decl->sym->ir_name);
+            struct ir_value src = emit_expr(decl->object.init);
             
             emit_copy(src, dst);
         }
@@ -731,7 +747,7 @@ static void emit_function_params(struct ir_function *fn, struct decl *params)
  */
 static void emit_implicit_fallthrough_return(struct decl *fn_decl)
 {
-    struct type *ret_ty = fn_decl->ty->func.return_type;
+    struct type *ret_ty = fn_decl->type->func.return_type;
 
     // TODO: Add some condition to not emit return if we can
 
@@ -773,7 +789,7 @@ struct ir_program *build_ir(struct ast_program *program)
     next_label_id = 1;
 
     for (struct decl *decl = program->decls; decl; decl = decl->next) {
-        if (decl->kind == DECL_VAR) {
+        if (decl->kind == DECL_OBJECT) {
             continue;
         }
 

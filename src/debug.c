@@ -54,15 +54,15 @@ static void print_type_inline(struct type *ty)
     }
 
     switch (ty->kind) {
-        case TY_VOID:
+        case TYPE_VOID:
             printf("void");
             break;
 
-        case TY_INT:
+        case TYPE_INT:
             printf("int");
             break;
 
-        case TY_FUNCTION:
+        case TYPE_FUNCTION:
             printf("(fn ");
 
             if (!ty->func.has_prototype) {
@@ -74,7 +74,7 @@ static void print_type_inline(struct type *ty)
 
                 for (struct decl *p = ty->func.params; p; p = p->next) {
                     printf(" ");
-                    print_type_inline(p->ty);
+                    print_type_inline(p->type);
                 }
 
                 printf(")");
@@ -92,9 +92,9 @@ static void print_expr_ann(struct expr *expr)
     if (!expr)
         return;
 
-    if (expr->ty) {
+    if (expr->type) {
         printf(" :type ");
-        print_type_inline(expr->ty);
+        print_type_inline(expr->type);
     }
 
     if (expr->is_lvalue)
@@ -315,7 +315,7 @@ static void print_param_decl(struct decl *p, int depth)
 {
     indent(depth);
     printf("(param %s (type ", token_to_cstr(p->name));
-    print_type_inline(p->ty);
+    print_type_inline(p->type);
     printf(")");
 
     if (p->storage_class != SC_NONE)
@@ -352,19 +352,19 @@ static void print_decl(struct decl *d, int depth)
     }
 
     switch (d->kind) {
-        case DECL_VAR:
+        case DECL_OBJECT:
             indent(depth);
             printf("(var %s\n", token_to_cstr(d->name));
 
             indent(depth + 1);
             printf("(type ");
-            print_type_inline(d->ty);
+            print_type_inline(d->type);
             printf(")\n");
 
             print_decl_attrs(d, depth + 1);
 
-            if (d->var.init)
-                print_named_expr("init", d->var.init, depth + 1);
+            if (d->object.init)
+                print_named_expr("init", d->object.init, depth + 1);
 
             indent(depth);
             printf(")\n");
@@ -376,7 +376,7 @@ static void print_decl(struct decl *d, int depth)
 
             indent(depth + 1);
             printf("(type ");
-            print_type_inline(d->ty);
+            print_type_inline(d->type);
             printf(")\n");
 
             print_decl_attrs(d, depth + 1);

@@ -4,9 +4,9 @@
 #include <stdbool.h>
 
 enum type_kind {
-    TY_VOID,
-    TY_INT,
-    TY_FUNCTION
+    TYPE_VOID,
+    TYPE_INT,
+    TYPE_FUNCTION
 };
 
 struct type {

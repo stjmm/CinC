@@ -7,7 +7,8 @@
 
 enum ir_value_kind {
     IR_VALUE_CONSTANT,
-    IR_VALUE_NAME,
+    IR_VALUE_PSEUDO,
+    IR_VALUE_STATIC,
 };
 
 struct ir_value {

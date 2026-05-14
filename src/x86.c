@@ -24,8 +24,6 @@
 #define STACK_SLOT_SIZE 4
 #define ARG_REG_COUNT 6
 
-static struct ir_static_variable *current_static_vars;
-
 static const enum reg arg_regs[] = {
     REG_DI,
     REG_SI,
@@ -201,16 +199,6 @@ static struct asm_instr *make_push(struct operand oper)
 static struct asm_instr *make_ret(void)   { return new_instr(ASM_RET); }
 static struct asm_instr *make_cdq(void)   { return new_instr(ASM_CDQ); }
 
-static bool is_static_var_name(const char *name)
-{
-    for (struct ir_static_variable *var = current_static_vars; var; var = var->next)  {
-        if (strcmp(var->name, name) == 0)
-            return true;
-    }
-
-    return false;
-}
-
 static bool is_memory_operand(struct operand op)
 {
     return op.type == OPERAND_STACK || op.type == OPERAND_DATA;
@@ -222,7 +210,10 @@ static struct operand convert_val(struct ir_value val)
     if (val.kind == IR_VALUE_CONSTANT)
         return make_imm(val.constant);
 
-    if (is_static_var_name(val.name))
+    if (val.kind == IR_VALUE_PSEUDO)
+        return make_pseudo(val.name);
+
+    if (val.kind == IR_VALUE_STATIC)
         return make_data(val.name);
 
     return make_pseudo(val.name);
@@ -520,8 +511,6 @@ static struct asm_static_variable *lower_ir_static_variable(struct ir_static_var
 static struct asm_program *lower_ir_program(struct ir_program *ir)
 {
     struct asm_program *program = calloc(1, sizeof(struct asm_program));
-
-    current_static_vars = ir->static_vars;
 
     struct asm_function *head = NULL;
     struct asm_function *tail = NULL;
