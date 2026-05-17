@@ -180,7 +180,7 @@ static void synchronize_translation_unit(void)
 /* Expression parsing */
 
 static struct expr *parse_expression(enum precedence prec);
-static struct parse_rule *get_rule(enum token_type type);
+static struct parse_rule *get_precedence(enum token_type type);
 
 static struct expr *number(void)
 {
@@ -232,7 +232,7 @@ static struct expr *grouping(void)
 static struct expr *binary(struct expr *left)
 {
     struct token op = parser_state.previous;
-    struct parse_rule *rule = get_rule(op.type);
+    struct parse_rule *rule = get_precedence(op.type);
 
     struct expr *right = parse_expression(rule->prec + 1);
     if (!right)
@@ -392,7 +392,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
 };
 
-static struct parse_rule *get_rule(enum token_type type)
+static struct parse_rule *get_precedence(enum token_type type)
 {
     return &parse_rules[type];
 }
@@ -400,7 +400,7 @@ static struct parse_rule *get_rule(enum token_type type)
 static struct expr *parse_expression(enum precedence prec)
 {
     advance();
-    prefix_parse_fn prefix = get_rule(parser_state.previous.type)->prefix;
+    prefix_parse_fn prefix = get_precedence(parser_state.previous.type)->prefix;
     if (!prefix) {
         error(&parser_state.previous, "Expected expression");
         return NULL;
@@ -408,9 +408,9 @@ static struct expr *parse_expression(enum precedence prec)
 
     struct expr *left = prefix();
 
-    while (prec <= get_rule(parser_state.current.type)->prec) {
+    while (prec <= get_precedence(parser_state.current.type)->prec) {
         advance();
-        infix_parse_fn infix = get_rule(parser_state.previous.type)->infix;
+        infix_parse_fn infix = get_precedence(parser_state.previous.type)->infix;
         left = infix(left);
     }
 

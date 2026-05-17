@@ -671,9 +671,8 @@ static void asm_phase3(struct asm_function *fn)
     struct asm_instr *curr = fn->first;
     while (curr) {
         switch (curr->type) {
-            
-            // mov mem, mem -> movl mem, r10d / movl r10d, mem
             case ASM_MOV: {
+                // mov mem, mem -> movl mem, r10d / movl r10d, mem
                 bool src_mem = is_memory_operand(curr->mov.src);
                 bool dst_mem = is_memory_operand(curr->mov.dst);
 
@@ -686,7 +685,6 @@ static void asm_phase3(struct asm_function *fn)
 
                 break;
             }
-
             case ASM_BINARY: {
                 bool src_mem = is_memory_operand(curr->binary.src);
                 bool dst_mem = is_memory_operand(curr->binary.dst);
@@ -717,9 +715,8 @@ static void asm_phase3(struct asm_function *fn)
                 }
                 break;
             }
-            
-            // idiv $imm -> movl $imm, %r10d / idiv %r10d
             case ASM_IDIV: {
+                // idiv $imm -> movl $imm, %r10d / idiv %r10d
                 if (curr->idiv.oper.type != OPERAND_IMM) break;
 
                 struct asm_instr *a = make_mov(curr->idiv.oper, r10);
@@ -786,8 +783,8 @@ static const char *reg_name_32(enum reg r)
         case REG_DX:  return "edx";
         case REG_DI:  return "edi";
         case REG_SI:  return "esi";
-        case REG_R8: return  "r8d";
-        case REG_R9: return  "r9d";
+        case REG_R8:  return  "r8d";
+        case REG_R9:  return  "r9d";
         case REG_R10: return "r10d";
         case REG_R11: return "r11d";
         default:      return "unknown";
@@ -802,8 +799,8 @@ static const char *reg_name_64(enum reg r)
         case REG_DX:  return "rdx";
         case REG_DI:  return "rdi";
         case REG_SI:  return "rsi";
-        case REG_R8: return  "r8";
-        case REG_R9: return  "r9";
+        case REG_R8:  return  "r8";
+        case REG_R9:  return  "r9";
         case REG_R10: return "r10";
         case REG_R11: return "r11";
         default:      return "unknown";

@@ -120,7 +120,7 @@ static void append_to_all_symbols(struct symbol *sym)
     all_symbols_tail = sym;
 }
 
-static struct symbol *symbol_new(struct decl *d)
+static struct symbol *create_symbol_from_decl(struct decl *d)
 {
     struct symbol *sym = calloc(1, sizeof(struct symbol));
     sym->kind = d->kind == DECL_FUNCTION ? SYM_FUNCTION : SYM_OBJECT;
@@ -162,7 +162,7 @@ static enum linkage compute_extern_linkage(struct symbol *prior_visible)
     return LINK_EXTERNAL;
 }
 
-static enum linkage compute_linkage(struct decl *d, struct symbol *prior_visible)
+static enum linkage determine_decl_linkage(struct decl *d, struct symbol *prior_visible)
 {
     // Parameters have no linkage
     if (d->is_parameter)
@@ -202,7 +202,7 @@ static enum linkage compute_linkage(struct decl *d, struct symbol *prior_visible
     return LINK_NONE;
 }
 
-static enum storage_duration compute_storage_duration(struct decl *d)
+static enum storage_duration determine_storage_duration(struct decl *d)
 {
     // Function is always static
     if (d->kind == DECL_FUNCTION)
@@ -219,7 +219,7 @@ static enum storage_duration compute_storage_duration(struct decl *d)
     return SD_AUTO;
 }
 
-static void classify_definition(struct decl *d)
+static void classify_decl_definition(struct decl *d)
 {
     d->is_definition = false;
     d->is_tentative = false;
@@ -312,6 +312,7 @@ static void validate_decl(struct decl *d)
 
     // TODO: Check typedef stuff
 
+    // Validate function
     if (d->kind == DECL_FUNCTION) {
         validate_function_params(d);
 
@@ -329,6 +330,7 @@ static void validate_decl(struct decl *d)
         return;
     }
 
+    // Validate objects
     if (type_is_void(d->type))
         error(&d->name, "Object cannot have type void");
 
@@ -336,7 +338,7 @@ static void validate_decl(struct decl *d)
         error(&d->name, "Block-scope extern declaration cannot have an initializer");
 }
 
-static struct symbol *merge_symbol(struct decl *d, struct symbol *sym,
+static struct symbol *merge_redeclaration_into_symbol(struct decl *d, struct symbol *sym,
                                     bool install_in_current_scope)
 {
     if (d->linkage != sym->linkage)
@@ -367,15 +369,14 @@ static struct symbol *merge_symbol(struct decl *d, struct symbol *sym,
     return sym;
 }
 
-static struct symbol *declare_symbol(struct decl *d)
+static struct symbol *bind_declaration_symbol(struct decl *d)
 {
     struct symbol *prior_visible = scope_lookup_visible(current_scope,
             d->name.start, d->name.length);
 
-    d->linkage = compute_linkage(d, prior_visible);
-    d->storage_duration = compute_storage_duration(d);
-    classify_definition(d);
-
+    d->linkage = determine_decl_linkage(d, prior_visible);
+    d->storage_duration = determine_storage_duration(d);
+    classify_decl_definition(d);
 
     struct symbol *prior_current = scope_lookup_current(current_scope,
             d->name.start, d->name.length);
@@ -389,7 +390,7 @@ static struct symbol *declare_symbol(struct decl *d)
             return prior_current;
         }
 
-        return merge_symbol(d, prior_current, false);
+        return merge_redeclaration_into_symbol(d, prior_current, false);
     }
 
     /* Visible linked declaration
@@ -402,7 +403,7 @@ static struct symbol *declare_symbol(struct decl *d)
      */
     if (prior_visible && has_linkage(prior_visible) &&
         d->linkage == prior_visible->linkage) {
-        return merge_symbol(d, prior_visible, true);
+        return merge_redeclaration_into_symbol(d, prior_visible, true);
     }
 
     /*
@@ -421,7 +422,7 @@ static struct symbol *declare_symbol(struct decl *d)
             hashmap_get(&external_symbols, d->name.start, d->name.length);
 
         if (prior_external)
-            return merge_symbol(d, prior_external, true);
+            return merge_redeclaration_into_symbol(d, prior_external, true);
     }
 
     // Internal/external linkage confict in same translation unit
@@ -444,7 +445,7 @@ static struct symbol *declare_symbol(struct decl *d)
     /*
      * New symbol
      */
-    struct symbol *sym = symbol_new(d);
+    struct symbol *sym = create_symbol_from_decl(d);
 
     hashmap_set(&current_scope->ordinary,
                 d->name.start,
@@ -638,7 +639,7 @@ static void analyze_decl_list(struct decl *decls)
 
     for (struct decl *d = decls; d; d = d->next) {
         validate_decl(d);
-        declare_symbol(d);
+        bind_declaration_symbol(d);
 
         if (d->kind == DECL_OBJECT && d->object.init) {
             analyze_expr(d->object.init);
@@ -1216,6 +1217,7 @@ static void resolve_switches_stmt(struct stmt *stmt)
             resolve_switches_stmt(stmt->switch_stmt.body);
             break;
         }
+
         case STMT_IF:
             resolve_switches_stmt(stmt->if_stmt.then_stmt);
             resolve_switches_stmt(stmt->if_stmt.else_stmt);
@@ -1276,7 +1278,7 @@ static void analyze_function_body(struct decl *fn)
         }
 
         validate_decl(p);
-        declare_symbol(p);
+        bind_declaration_symbol(p);
     }
 
     analyze_block(fn->func.body->block.items, false);
@@ -1313,7 +1315,7 @@ struct ast_program *sema_analysis(struct ast_program *program)
      */
     for (struct decl *d = program->decls; d; d = d->next) {
         validate_decl(d);
-        declare_symbol(d);
+        bind_declaration_symbol(d);
 
         if (d->kind == DECL_OBJECT && d->object.init) {
             analyze_expr(d->object.init);
