@@ -222,6 +222,15 @@ static void print_expr(struct expr *expr, int depth)
             printf(")\n");
             break;
 
+        case EXPR_CAST:
+            indent(depth);
+            printf("(cast ");
+            print_type_inline(expr->cast.target_type);
+            printf(" ");
+            print_expr_ann(expr->cast.operand);
+            printf(")\n");
+            break;
+
         case EXPR_UNARY:
             indent(depth);
             printf("(unary %s", token_to_cstr(expr->unary.op));

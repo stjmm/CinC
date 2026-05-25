@@ -495,6 +495,27 @@ static void check_call_args(struct expr *expr)
     }
 }
 
+static void convert_expr_to(struct expr **slot, struct type *target)
+{
+    struct expr *e = *slot;
+
+    if (types_compatible(e->type, target))
+        return;
+
+    struct expr *next = e->next;
+    e->next = NULL;
+
+    struct expr *cast = expr_new(EXPR_CAST, e->tok);
+    cast->cast.target_type = target;
+    cast->cast.operand = e;
+    cast->type = target;
+    cast->is_lvalue = false;
+
+    // Preserve linked list structure, for expr_args
+    cast->next = next;
+    *slot = cast;
+}
+
 static void analyze_expr(struct expr *expr)
 {
     if (!expr)
@@ -506,6 +527,11 @@ static void analyze_expr(struct expr *expr)
             expr->is_lvalue = false;
             break;
 
+        case EXPR_LONG_CONSTANT:
+            expr->type = type_long();
+            expr->is_lvalue = false;
+            break;
+
         case EXPR_IDENTIFIER: {
             struct symbol *sym = scope_lookup_visible(current_scope,
                     expr->identifier.name.start, expr->identifier.name.length);
@@ -514,6 +540,11 @@ static void analyze_expr(struct expr *expr)
                 error(&expr->tok, "Undeclared identifier");
                 expr->type = type_int();
                 expr->is_lvalue = false;
+                return;
+            }
+
+            if (type_is_function(sym->ty)) {
+                error(&expr->tok, "Function name used as variable");
                 return;
             }
 
@@ -552,7 +583,13 @@ static void analyze_expr(struct expr *expr)
 
         case EXPR_UNARY:
             analyze_expr(expr->unary.operand);
-            expr->type = expr->unary.operand->type;
+
+            if (expr->unary.op.type == TOKEN_BANG ||
+                    expr->unary.op.type == TOKEN_TILDE)
+                expr->type = type_int();
+            else
+                expr->type = expr->unary.operand->type;
+
             expr->is_lvalue = false;
             break;
 
@@ -560,11 +597,40 @@ static void analyze_expr(struct expr *expr)
             analyze_expr(expr->binary.left);
             analyze_expr(expr->binary.right);
 
-            if (!type_is_int(expr->binary.left->type) || 
-                !type_is_int(expr->binary.right->type))
-                error(&expr->tok, "For now we only support int binary ops");
-            
-            expr->type = expr->binary.left->type;
+            if (expr->binary.op.type == TOKEN_AND ||
+                expr->binary.op.type == TOKEN_OR) {
+                expr->type = type_int();
+                expr->is_lvalue = false;
+                break;
+            }
+
+            struct type *common_type = type_get_common(expr->binary.left->type,
+                expr->binary.right->type);
+
+            convert_expr_to(&expr->binary.left, common_type);
+            convert_expr_to(&expr->binary.right, common_type);
+
+            switch (expr->binary.op.type) {
+                case TOKEN_PLUS:
+                case TOKEN_MINUS:
+                case TOKEN_STAR:
+                case TOKEN_SLASH:
+                case TOKEN_PERCENT:
+                    expr->type = common_type;
+                    break;
+                case TOKEN_EQUAL_EQUAL:
+                case TOKEN_BANG_EQUAL:
+                case TOKEN_LESS:
+                case TOKEN_LESS_EQUAL:
+                case TOKEN_GREATER:
+                case TOKEN_GREATER_EQUAL:
+                    expr->type = type_int();
+                    break;
+                default:
+                    expr->type = common_type;
+                    break;
+            }
+
             expr->is_lvalue = false;
             break;
 
@@ -599,6 +665,12 @@ static void analyze_expr(struct expr *expr)
             check_call_args(expr);
 
             expr->type = expr->call.callee->type->func.return_type;
+            expr->is_lvalue = false;
+            break;
+
+        case EXPR_CAST:
+            analyze_expr(expr->cast.operand);
+            expr->type = expr->cast.target_type;
             expr->is_lvalue = false;
             break;
     }

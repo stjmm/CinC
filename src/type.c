@@ -72,6 +72,21 @@ bool type_is_object(struct type *ty)
     return ty && ty->kind != TYPE_FUNCTION && ty->kind != TYPE_VOID;
 }
 
+bool type_is_arithmetic(struct type *ty)
+{
+    return type_is_integer(ty);
+}
+
+bool type_is_scalar(struct type *ty)
+{
+    return type_is_arithmetic(ty);
+}
+
+bool type_is_integer(struct type *ty)
+{
+    return type_is_int(ty) || type_is_long(ty);
+}
+
 bool types_compatible(struct type *a, struct type *b)
 {
     if (a == b)
