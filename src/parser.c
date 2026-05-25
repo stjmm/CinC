@@ -183,6 +183,7 @@ static void synchronize_translation_unit(void)
 
 static struct expr *parse_expression(enum precedence prec);
 static struct parse_rule *get_precedence(enum token_type type);
+static struct type *parse_type_name(void);
 
 static struct expr *constant(void)
 {
@@ -243,8 +244,25 @@ static struct expr *pre(void)
     return expr;
 }
 
-static struct expr *grouping(void)
+static struct expr *grouping_or_cast(void)
 {
+    struct token lparen = parser_state.previous;
+
+    if (is_type_specifier(parser_state.current.type)) {
+        struct type *target_type = parse_type_name();
+
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after type name");
+
+        struct expr *operand = parse_expression(PREC_UNARY);
+        if (!operand)
+            return NULL;
+
+        struct expr *expr = expr_new(EXPR_CAST, lparen);
+        expr->cast.target_type = target_type;
+        expr->cast.operand = operand;
+        return expr;
+    }
+
     struct expr *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after expression");
     return expr;
@@ -336,7 +354,7 @@ static struct expr *call(struct expr *left)
 /* Each token maps to a prefix rule at the start of an expression,
  * an infix rule and minimum precedence level for infix use. */
 static struct parse_rule parse_rules[] = {
-    [TOKEN_LEFT_PAREN]    = {grouping, call, PREC_POSTFIX},
+    [TOKEN_LEFT_PAREN]    = {grouping_or_cast, call, PREC_POSTFIX},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
@@ -735,6 +753,30 @@ static struct type *parse_type_from_count(int int_count, int long_count,
     return type_int();
 }
 
+static struct type *parse_type_name(void)
+{
+    int int_count = 0;
+    int long_count = 0;
+    int void_count = 0;
+
+    struct token first_type_tok = parser_state.current;
+
+    while(is_type_specifier(parser_state.current.type)) {
+        if (is_type_specifier(parser_state.current.type)) {
+            if (parser_state.current.type == TOKEN_INT)
+                int_count++;
+            else if (parser_state.current.type == TOKEN_LONG)
+                long_count++;
+            else if (parser_state.current.type == TOKEN_VOID)
+                void_count++;
+
+            advance();
+        }
+    }
+
+    return parse_type_from_count(int_count, long_count, void_count, first_type_tok);
+}
+
 static struct decl_specs parse_decl_specs(void)
 {
     struct decl_specs specs = {0};
@@ -743,14 +785,19 @@ static struct decl_specs parse_decl_specs(void)
     int int_count = 0;
     int long_count = 0;
     int void_count = 0;
-    int storage_count = 0;
+    int storage_class_count = 0;
+
+    struct token first_type_tok = {0};
 
     while (is_declaration_start(parser_state.current.type)) {
         if (is_storage_class_specifier(parser_state.current.type)) {
-            storage_count++;
+            storage_class_count++;
 
-            if (storage_count > 1)
+            if (storage_class_count > 1)
                 error(&parser_state.current, "Multiple storage-class specifiers");
+
+            if (!first_type_tok.start)
+                first_type_tok = parser_state.current;
 
             specs.storage_tok = parser_state.current;
 
@@ -782,7 +829,10 @@ static struct decl_specs parse_decl_specs(void)
         }
     }
 
-    specs.base_type = parse_type_from_count(int_count, long_count, void_count, specs.type_tok);
+    if (!first_type_tok.start)
+        first_type_tok = parser_state.current;
+
+    specs.base_type = parse_type_from_count(int_count, long_count, void_count, first_type_tok);
 
     return specs;
 }

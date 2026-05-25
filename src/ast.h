@@ -93,7 +93,7 @@ struct expr {
 
         struct {
             struct type *target_type;
-            struct type *operand;
+            struct expr *operand;
         } cast;
     };
 };
