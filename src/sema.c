@@ -501,7 +501,7 @@ static void analyze_expr(struct expr *expr)
         return;
 
     switch (expr->kind) {
-        case EXPR_INT_LITERAL:
+        case EXPR_INT_CONSTANT:
             expr->type = type_int();
             expr->is_lvalue = false;
             break;
@@ -623,13 +623,13 @@ static void record_static_initializer(struct decl *d)
     if (!d->object.init)
         return;
 
-    if (d->object.init->kind != EXPR_INT_LITERAL) {
+    if (d->object.init->kind != EXPR_INT_CONSTANT) {
         error(&d->name, "Initializer for object with static storage must be constant");
         return;
     }
 
     d->sym->has_static_init = true;
-    d->sym->static_init = d->object.init->int_value;
+    d->sym->static_init = d->object.init->constant_value;
 }
 
 static void analyze_decl_list(struct decl *decls)
@@ -1118,18 +1118,18 @@ static void resolve_cases_stmt(struct stmt *stmt, struct switch_annotation *ann)
             /*
              * TODO: This should calculate the constant from case value expr
              */
-            if (stmt->case_stmt.value->kind != EXPR_INT_LITERAL) {
+            if (stmt->case_stmt.value->kind != EXPR_INT_CONSTANT) {
                 error(&stmt->tok, "'case' must be an integer constant");
                 return;
             }
 
-            long value = stmt->case_stmt.value->int_value;
+            int64_t value = stmt->case_stmt.value->constant_value;
 
             for (struct case_entry *e = ann->cases; e; e = e->next) {
                 if (e->node->kind != STMT_CASE)
                     continue;
 
-                if (e->node->case_stmt.value->int_value == value) {
+                if (e->node->case_stmt.value->constant_value == value) {
                     error(&stmt->tok, "Duplicate case value in switch");
                     return;
                 }

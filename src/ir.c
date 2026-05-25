@@ -294,8 +294,8 @@ static void emit_block_item(struct block_item *item);
 static struct ir_value emit_expr(struct expr *expr)
 {
     switch (expr->kind) {
-        case EXPR_INT_LITERAL:
-            return ir_constant(expr->int_value);
+        case EXPR_INT_CONSTANT:
+            return ir_constant(expr->constant_value);
 
         case EXPR_IDENTIFIER:
             return emit_object_value(expr->identifier.sym);
@@ -629,7 +629,7 @@ static void emit_stmt(struct stmt *stmt)
                     continue;
 
                 // TODO: Evaluate at compile time
-                int value = case_node->case_stmt.value->int_value;
+                int value = case_node->case_stmt.value->constant_value;
                 struct ir_value case_value = ir_constant(value);
                 
                 int case_label = get_or_create_label_id_cstr(case_node->case_stmt.label);

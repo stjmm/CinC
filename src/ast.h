@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "lexer.h"
 
@@ -32,7 +33,8 @@
 
 
 enum expr_kind {
-    EXPR_INT_LITERAL,
+    EXPR_INT_CONSTANT,
+    EXPR_LONG_CONSTANT,
     EXPR_IDENTIFIER,
     EXPR_UNARY,
     EXPR_BINARY,
@@ -40,7 +42,8 @@ enum expr_kind {
     EXPR_POST,
     EXPR_ASSIGNMENT,
     EXPR_CONDITIONAL,
-    EXPR_CALL
+    EXPR_CALL,
+    EXPR_CAST
 };
 
 struct expr {
@@ -53,7 +56,7 @@ struct expr {
     bool is_lvalue;
 
     union {
-        long int_value;
+        int64_t constant_value; // We only have signed integers for now
 
         struct {
             struct token name;
@@ -87,6 +90,11 @@ struct expr {
             struct expr *callee;
             struct expr *args;
         } call;
+
+        struct {
+            struct type *target_type;
+            struct type *operand;
+        } cast;
     };
 };
 
