@@ -143,3 +143,11 @@ struct type *type_composite(struct type *a, struct type *b)
 
     return a;
 }
+
+struct type *type_get_common(struct type *a, struct type *b)
+{
+    if (a == b)
+        return a;
+    else
+        return type_long();
+}
