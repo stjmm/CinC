@@ -1,6 +1,9 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <limits.h>
 
 #include "parser.h"
 #include "ast.h"
@@ -187,28 +190,30 @@ static struct type *parse_type_name(void);
 
 static struct expr *constant(void)
 {
-#define SIGNED_INT_32_MAX 2147483647ULL
-#define SIGNED_INT_64_MAX 9223372036854775807ULL
-
     struct token tok = parser_state.previous;
-    uint64_t val = strtoull(tok.start, NULL, 10);
 
-    if (val > SIGNED_INT_64_MAX)
+    errno = 0;
+    char *end = NULL;
+    unsigned long long value = strtoll(tok.start, &end, 10);
+
+    if (errno == ERANGE || value > (unsigned long long)INT64_MAX) {
         error(&tok, "Constant is too large to represent as an signed int or signed long");
+        value = INT64_MAX;
+    }
 
     enum expr_kind kind;
 
-    if (tok.type == TOKEN_INT_CONSTANT && val <= SIGNED_INT_32_MAX)
+    // The constant will become int or long from the token
+    if (tok.type == TOKEN_LONG_CONSTANT)
+        kind = EXPR_LONG_CONSTANT;
+    else if (value <= INT32_MAX)
         kind = EXPR_INT_CONSTANT;
     else
         kind = EXPR_LONG_CONSTANT;
         
     struct expr *expr = expr_new(kind, tok);
-    expr->constant_value = (int64_t)val;
+    expr->constant_value = (int64_t)value;
     return expr;
-
-#undef SIGNED_INT_32_MAX
-#undef SIGNED_INT_64_MAX 
 }
 
 static struct expr *identifier(void)
@@ -410,6 +415,7 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_LONG_CONSTANT] = {constant, NULL, PREC_NONE},
 
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_LONG]          = {NULL, NULL, PREC_NONE},
     [TOKEN_VOID]          = {NULL, NULL, PREC_NONE},
     [TOKEN_STATIC]        = {NULL, NULL, PREC_NONE},
     [TOKEN_EXTERN]        = {NULL, NULL, PREC_NONE},
@@ -462,7 +468,7 @@ static struct block_item *parse_block_item(void);
 static struct stmt *parse_block_after_lbrace(void);
 static struct decl *parse_declaration(void);
 
-static struct block_item *parse_case_default_items()
+static struct block_item *parse_case_default_items(void)
 {
     struct block_item *head = NULL;
     struct block_item *tail = NULL;
@@ -492,9 +498,6 @@ static struct block_item *parse_case_default_items()
 
 static struct stmt *parse_statement(void)
 {
-     /*
-     * TODO: Should this guard be here or in sema?
-     */
     if (is_declaration_start(parser_state.current.type)) {
         error(&parser_state.current, "Expected statement, not declaration");
         return NULL;
@@ -790,14 +793,14 @@ static struct decl_specs parse_decl_specs(void)
     struct token first_type_tok = {0};
 
     while (is_declaration_start(parser_state.current.type)) {
+        if (!first_type_tok.start)
+            first_type_tok = parser_state.current;
+
         if (is_storage_class_specifier(parser_state.current.type)) {
             storage_class_count++;
 
             if (storage_class_count > 1)
                 error(&parser_state.current, "Multiple storage-class specifiers");
-
-            if (!first_type_tok.start)
-                first_type_tok = parser_state.current;
 
             specs.storage_tok = parser_state.current;
 
@@ -963,7 +966,7 @@ static struct block_item *parse_block_item(void)
     return item;
 }
 
-static struct stmt *parse_block_after_lbrace()
+static struct stmt *parse_block_after_lbrace(void)
 {
     struct stmt *block = stmt_new(STMT_BLOCK, parser_state.previous);
     struct block_item *tail = NULL;
