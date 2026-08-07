@@ -62,6 +62,10 @@ static void print_type_inline(struct type *ty)
             printf("int");
             break;
 
+        case TYPE_LONG:
+            printf("long");
+            break;
+
         case TYPE_FUNCTION:
             printf("(fn ");
 
@@ -197,17 +201,33 @@ static void print_expr(struct expr *expr, int depth)
     }
 
     switch (expr->kind) {
-        case EXPR_INT_LITERAL:
+        case EXPR_INT_CONSTANT:
             indent(depth);
-            printf("(int %ld", expr->int_value);
+            printf("(int %ld", expr->constant_value);
             print_expr_ann(expr);
             printf(")\n");
+            break;
+
+        case EXPR_LONG_CONSTANT:
+            indent(depth);
+            printf("(long %ld", expr->constant_value);
+            print_expr_ann(expr);
+            printf(")");
             break;
 
         case EXPR_IDENTIFIER:
             indent(depth);
             printf("(ident %s", token_to_cstr(expr->identifier.name));
             print_expr_ann(expr);
+            printf(")\n");
+            break;
+
+        case EXPR_CAST:
+            indent(depth);
+            printf("(cast ");
+            print_type_inline(expr->cast.target_type);
+            printf(" ");
+            print_expr_ann(expr->cast.operand);
             printf(")\n");
             break;
 

@@ -15,6 +15,12 @@ static struct type builtin_int = {
     .align = 4
 };
 
+static struct type builtin_long = {
+    .kind = TYPE_LONG,
+    .size = 8,
+    .align = 8
+};
+
 struct type *type_void(void)
 {
     return &builtin_void;
@@ -23,6 +29,11 @@ struct type *type_void(void)
 struct type *type_int(void)
 {
     return &builtin_int;
+}
+
+struct type *type_long(void)
+{
+    return &builtin_long;
 }
 
 struct type *type_function(struct type *return_type, struct decl *params, int param_count, bool has_prototype)
@@ -46,6 +57,11 @@ bool type_is_int(struct type *ty)
     return ty && ty->kind == TYPE_INT;
 }
 
+bool type_is_long(struct type *ty)
+{
+    return ty && ty->kind == TYPE_LONG;
+}
+
 bool type_is_function(struct type *ty)
 {
     return ty && ty->kind == TYPE_FUNCTION;
@@ -54,6 +70,21 @@ bool type_is_function(struct type *ty)
 bool type_is_object(struct type *ty)
 {
     return ty && ty->kind != TYPE_FUNCTION && ty->kind != TYPE_VOID;
+}
+
+bool type_is_arithmetic(struct type *ty)
+{
+    return type_is_integer(ty);
+}
+
+bool type_is_scalar(struct type *ty)
+{
+    return type_is_arithmetic(ty);
+}
+
+bool type_is_integer(struct type *ty)
+{
+    return type_is_int(ty) || type_is_long(ty);
 }
 
 bool types_compatible(struct type *a, struct type *b)
@@ -70,6 +101,7 @@ bool types_compatible(struct type *a, struct type *b)
     switch (a->kind) {
         case TYPE_VOID:
         case TYPE_INT:
+        case TYPE_LONG:
             return true;
 
         case TYPE_FUNCTION:
@@ -110,4 +142,12 @@ struct type *type_composite(struct type *a, struct type *b)
         return a;
 
     return a;
+}
+
+struct type *type_get_common(struct type *a, struct type *b)
+{
+    if (a == b)
+        return a;
+    else
+        return type_long();
 }

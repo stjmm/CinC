@@ -6,6 +6,7 @@
 enum type_kind {
     TYPE_VOID,
     TYPE_INT,
+    TYPE_LONG,
     TYPE_FUNCTION
 };
 
@@ -34,13 +35,19 @@ struct type {
 
 struct type *type_void(void);
 struct type *type_int(void);
+struct type *type_long(void);
 struct type *type_function(struct type *return_type, struct decl *params, int param_count, bool has_prototype);
 struct type *type_composite(struct type *a, struct type *b);
+struct type *type_get_common(struct type *a, struct type *b);
 
 bool type_is_void(struct type *ty);
 bool type_is_int(struct type *ty);
+bool type_is_long(struct type *ty);
 bool type_is_function(struct type *ty);
 bool type_is_object(struct type *ty);
+bool type_is_integer(struct type *ty);
+bool type_is_arithmetic(struct type *ty);
+bool type_is_scalar(struct type *ty);
 bool types_compatible(struct type *a, struct type *b);
 
 #endif

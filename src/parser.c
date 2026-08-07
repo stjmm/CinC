@@ -1,6 +1,9 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <limits.h>
 
 #include "parser.h"
 #include "ast.h"
@@ -115,7 +118,9 @@ static void consume(enum token_type type, const char *message)
 
 static bool is_type_specifier(enum token_type type)
 {
-    return type == TOKEN_INT || type == TOKEN_VOID;
+    return type == TOKEN_INT ||
+           type == TOKEN_LONG ||
+           type == TOKEN_VOID;
 }
 
 static bool is_storage_class_specifier(enum token_type type)
@@ -181,11 +186,33 @@ static void synchronize_translation_unit(void)
 
 static struct expr *parse_expression(enum precedence prec);
 static struct parse_rule *get_precedence(enum token_type type);
+static struct type *parse_type_name(void);
 
-static struct expr *number(void)
+static struct expr *constant(void)
 {
-    struct expr *expr = expr_new(EXPR_INT_LITERAL, parser_state.previous);
-    expr->int_value = strtol(parser_state.previous.start, NULL, 10);
+    struct token tok = parser_state.previous;
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long long value = strtoll(tok.start, &end, 10);
+
+    if (errno == ERANGE || value > (unsigned long long)INT64_MAX) {
+        error(&tok, "Constant is too large to represent as an signed int or signed long");
+        value = INT64_MAX;
+    }
+
+    enum expr_kind kind;
+
+    // The constant will become int or long from the token
+    if (tok.type == TOKEN_LONG_CONSTANT)
+        kind = EXPR_LONG_CONSTANT;
+    else if (value <= INT32_MAX)
+        kind = EXPR_INT_CONSTANT;
+    else
+        kind = EXPR_LONG_CONSTANT;
+        
+    struct expr *expr = expr_new(kind, tok);
+    expr->constant_value = (int64_t)value;
     return expr;
 }
 
@@ -222,8 +249,25 @@ static struct expr *pre(void)
     return expr;
 }
 
-static struct expr *grouping(void)
+static struct expr *grouping_or_cast(void)
 {
+    struct token lparen = parser_state.previous;
+
+    if (is_type_specifier(parser_state.current.type)) {
+        struct type *target_type = parse_type_name();
+
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after type name");
+
+        struct expr *operand = parse_expression(PREC_UNARY);
+        if (!operand)
+            return NULL;
+
+        struct expr *expr = expr_new(EXPR_CAST, lparen);
+        expr->cast.target_type = target_type;
+        expr->cast.operand = operand;
+        return expr;
+    }
+
     struct expr *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after expression");
     return expr;
@@ -315,7 +359,7 @@ static struct expr *call(struct expr *left)
 /* Each token maps to a prefix rule at the start of an expression,
  * an infix rule and minimum precedence level for infix use. */
 static struct parse_rule parse_rules[] = {
-    [TOKEN_LEFT_PAREN]    = {grouping, call, PREC_POSTFIX},
+    [TOKEN_LEFT_PAREN]    = {grouping_or_cast, call, PREC_POSTFIX},
     [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
@@ -367,9 +411,11 @@ static struct parse_rule parse_rules[] = {
     [TOKEN_GREATER_GREATER] = {NULL, binary, PREC_BITWISE_SHIFT},
 
     [TOKEN_IDENTIFIER]    = {identifier, NULL, PREC_NONE},
-    [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
+    [TOKEN_INT_CONSTANT]  = {constant, NULL, PREC_NONE},
+    [TOKEN_LONG_CONSTANT] = {constant, NULL, PREC_NONE},
 
     [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_LONG]          = {NULL, NULL, PREC_NONE},
     [TOKEN_VOID]          = {NULL, NULL, PREC_NONE},
     [TOKEN_STATIC]        = {NULL, NULL, PREC_NONE},
     [TOKEN_EXTERN]        = {NULL, NULL, PREC_NONE},
@@ -422,7 +468,7 @@ static struct block_item *parse_block_item(void);
 static struct stmt *parse_block_after_lbrace(void);
 static struct decl *parse_declaration(void);
 
-static struct block_item *parse_case_default_items()
+static struct block_item *parse_case_default_items(void)
 {
     struct block_item *head = NULL;
     struct block_item *tail = NULL;
@@ -452,9 +498,6 @@ static struct block_item *parse_case_default_items()
 
 static struct stmt *parse_statement(void)
 {
-     /*
-     * TODO: Should this guard be here or in sema?
-     */
     if (is_declaration_start(parser_state.current.type)) {
         error(&parser_state.current, "Expected statement, not declaration");
         return NULL;
@@ -687,20 +730,78 @@ static struct stmt *parse_statement(void)
 static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
                                                 bool allows_abstract_name);
 
+static struct type *parse_type_from_count(int int_count, int long_count,
+                                        int void_count, struct token err_tok)
+{
+    if (void_count) {
+        if (void_count == 1 && int_count == 0 && long_count == 0)
+            return type_void();
+
+        error(&err_tok, "Invalid type specifier combination");
+        return type_int();
+    }
+
+    if (long_count) {
+        if (long_count == 1 && int_count <= 1)
+            return type_long();
+
+        error(&err_tok, "Invalid use of 'long'");
+        return type_long();
+    }
+
+    if (int_count == 1)
+        return type_int();
+
+    error(&err_tok, "Expected declaration type");
+    return type_int();
+}
+
+static struct type *parse_type_name(void)
+{
+    int int_count = 0;
+    int long_count = 0;
+    int void_count = 0;
+
+    struct token first_type_tok = parser_state.current;
+
+    while(is_type_specifier(parser_state.current.type)) {
+        if (is_type_specifier(parser_state.current.type)) {
+            if (parser_state.current.type == TOKEN_INT)
+                int_count++;
+            else if (parser_state.current.type == TOKEN_LONG)
+                long_count++;
+            else if (parser_state.current.type == TOKEN_VOID)
+                void_count++;
+
+            advance();
+        }
+    }
+
+    return parse_type_from_count(int_count, long_count, void_count, first_type_tok);
+}
+
 static struct decl_specs parse_decl_specs(void)
 {
     struct decl_specs specs = {0};
     specs.storage_class = SC_NONE;
 
-    bool saw_storage = false;
-    bool saw_type = false;
+    int int_count = 0;
+    int long_count = 0;
+    int void_count = 0;
+    int storage_class_count = 0;
+
+    struct token first_type_tok = {0};
 
     while (is_declaration_start(parser_state.current.type)) {
+        if (!first_type_tok.start)
+            first_type_tok = parser_state.current;
+
         if (is_storage_class_specifier(parser_state.current.type)) {
-            if (saw_storage)
+            storage_class_count++;
+
+            if (storage_class_count > 1)
                 error(&parser_state.current, "Multiple storage-class specifiers");
 
-            saw_storage = true;
             specs.storage_tok = parser_state.current;
 
             if (parser_state.current.type == TOKEN_STATIC)
@@ -713,26 +814,28 @@ static struct decl_specs parse_decl_specs(void)
                 specs.storage_class = SC_REGISTER;
 
             advance();
-        } else if (is_type_specifier(parser_state.current.type)) {
-            if (saw_type)
-                error(&parser_state.current, "Multiple type specifiers");
+            continue;
+        }
 
-            saw_type = true;
+        if (is_type_specifier(parser_state.current.type)) {
             specs.type_tok = parser_state.current;
 
             if (parser_state.current.type == TOKEN_INT)
-                specs.base_type = type_int();
+                int_count++;
+            else if (parser_state.current.type == TOKEN_LONG)
+                long_count++;
             else if (parser_state.current.type == TOKEN_VOID)
-                specs.base_type = type_void();
+                void_count++;
 
             advance();
+            continue;
         }
     }
 
-    if (!saw_type) {
-        error(&parser_state.current, "Expected declaration type");
-        specs.base_type = type_int();
-    }
+    if (!first_type_tok.start)
+        first_type_tok = parser_state.current;
+
+    specs.base_type = parse_type_from_count(int_count, long_count, void_count, first_type_tok);
 
     return specs;
 }
@@ -863,7 +966,7 @@ static struct block_item *parse_block_item(void)
     return item;
 }
 
-static struct stmt *parse_block_after_lbrace()
+static struct stmt *parse_block_after_lbrace(void)
 {
     struct stmt *block = stmt_new(STMT_BLOCK, parser_state.previous);
     struct block_item *tail = NULL;

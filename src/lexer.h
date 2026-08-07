@@ -58,9 +58,11 @@
     X(TOKEN_GREATER_GREATER)      \
     /* Literals */                \
     X(TOKEN_IDENTIFIER)           \
-    X(TOKEN_NUMBER)               \
+    X(TOKEN_INT_CONSTANT)         \
+    X(TOKEN_LONG_CONSTANT)        \
     /* Keywords */                \
     X(TOKEN_INT)                  \
+    X(TOKEN_LONG)                 \
     X(TOKEN_VOID)                 \
     X(TOKEN_STATIC)               \
     X(TOKEN_EXTERN)               \

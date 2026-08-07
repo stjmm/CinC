@@ -2,9 +2,9 @@
 #define CINC_IR_H
 
 #include "ast.h"
+#include "type.h"
 
 /* Values */
-
 enum ir_value_kind {
     IR_VALUE_CONSTANT,
     IR_VALUE_PSEUDO,
@@ -22,7 +22,6 @@ struct ir_value {
 };
 
 /* Operations */
-
 enum ir_unary_op {
     IR_UNOP_NEG,
     IR_UNOP_BIT_NOT,
@@ -115,6 +114,16 @@ struct ir_instr {
         struct {
             int label_id;
         } label;
+
+        struct {
+            struct ir_value src;
+            struct ir_value dst;
+        } sign_extend;
+
+        struct {
+            struct ir_value src;
+            struct ir_value dst;
+        } truncate;
     };
 };
 
@@ -142,6 +151,8 @@ struct ir_static_variable {
     enum linkage linkage;
 
     int init; // Later ir_static_init
+
+    struct type *type;
 
     struct ir_static_variable *next;
 };

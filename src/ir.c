@@ -294,8 +294,11 @@ static void emit_block_item(struct block_item *item);
 static struct ir_value emit_expr(struct expr *expr)
 {
     switch (expr->kind) {
-        case EXPR_INT_LITERAL:
-            return ir_constant(expr->int_value);
+        case EXPR_INT_CONSTANT:
+            return ir_constant(expr->constant_value);
+
+        case EXPR_LONG_CONSTANT:
+            return ir_constant(expr->constant_value);
 
         case EXPR_IDENTIFIER:
             return emit_object_value(expr->identifier.sym);
@@ -472,7 +475,14 @@ static struct ir_value emit_expr(struct expr *expr)
             emit_call(calle, args, arg_count, true, dst);
 
             return dst;
-        }     
+        }
+        case EXPR_CAST: {
+            struct ir_value result = emit_expr(expr->cast.operand);
+            if (expr->cast.target_type == expr->cast.operand->type)
+                return result;
+
+            struct ir_value dst = make_temp();
+        }
 
         default:
             break;
@@ -629,7 +639,7 @@ static void emit_stmt(struct stmt *stmt)
                     continue;
 
                 // TODO: Evaluate at compile time
-                int value = case_node->case_stmt.value->int_value;
+                int value = case_node->case_stmt.value->constant_value;
                 struct ir_value case_value = ir_constant(value);
                 
                 int case_label = get_or_create_label_id_cstr(case_node->case_stmt.label);
@@ -725,6 +735,7 @@ static void emit_static_variables(struct ir_program *ir)
         var->name = sym->ir_name;
         var->linkage = sym->linkage;
         var->init = sym->has_static_init ? sym->static_init : 0;
+        var->type = sym->ty;
 
         append_static_variable(ir, var);
     }

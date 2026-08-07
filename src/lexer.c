@@ -138,11 +138,17 @@ static void skip_whitespace(void)
     }
 }
 
-// For now we only take ints
 static struct token number(void)
 {
-    while (is_digit(peek())) advance();
-    return make_token(TOKEN_NUMBER);
+    while (is_digit(peek()))
+        advance();
+
+    if (peek() == 'l' || peek() == 'L') {
+        advance();
+        return make_token(TOKEN_LONG_CONSTANT);
+    }
+
+    return make_token(TOKEN_INT_CONSTANT);
 }
 
 static enum token_type check_keyword(unsigned int start, unsigned int length,
@@ -191,6 +197,7 @@ static enum token_type identifier_type(void)
                     case 'n': return check_keyword(2, 1, "t", TOKEN_INT);
                 }
             break;
+        case 'l': return check_keyword(1, 3, "ong", TOKEN_LONG);
         case 's': 
             if (lexer_state.current - lexer_state.start > 1)
                 switch (lexer_state.start[1]) {
