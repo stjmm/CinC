@@ -297,6 +297,9 @@ static struct ir_value emit_expr(struct expr *expr)
         case EXPR_INT_CONSTANT:
             return ir_constant(expr->constant_value);
 
+        case EXPR_LONG_CONSTANT:
+            return ir_constant(expr->constant_value);
+
         case EXPR_IDENTIFIER:
             return emit_object_value(expr->identifier.sym);
 
@@ -472,7 +475,14 @@ static struct ir_value emit_expr(struct expr *expr)
             emit_call(calle, args, arg_count, true, dst);
 
             return dst;
-        }     
+        }
+        case EXPR_CAST: {
+            struct ir_value result = emit_expr(expr->cast.operand);
+            if (expr->cast.target_type == expr->cast.operand->type)
+                return result;
+
+            struct ir_value dst = make_temp();
+        }
 
         default:
             break;
@@ -725,6 +735,7 @@ static void emit_static_variables(struct ir_program *ir)
         var->name = sym->ir_name;
         var->linkage = sym->linkage;
         var->init = sym->has_static_init ? sym->static_init : 0;
+        var->type = sym->ty;
 
         append_static_variable(ir, var);
     }
