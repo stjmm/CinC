@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -std=c11 -pedantic
+CFLAGS=-std=c23 -Wall -Wextra -Wpedantic
 
 BUILD=build
 EXE=$(BUILD)/cinc
@@ -10,7 +10,8 @@ DEP=$(OBJ:.o=.d)
 
 all: debug
 
-debug: CFLAGS += -g
+debug: CFLAGS += -g -fsanitize=address,undefined
+debug: LDFLAGS += -fsanitize=address,undefined
 debug: $(EXE)
 
 release: CFLAGS += -O3 -DNDEBUG
