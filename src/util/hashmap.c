@@ -8,7 +8,7 @@
 static constexpr size_t HASHMAP_INITIAL_CAPACITY = 16;
 
 static uint32_t
-hash_cstring(const char *key, size_t len)
+hash_string(const char *key, size_t len)
 {
     uint32_t hash = 2166136261u;
 
@@ -27,7 +27,7 @@ find_entry(
     const char *key,
     size_t key_len)
 {
-    size_t index = hash_cstring(key, key_len) & (capacity - 1);
+    size_t index = hash_string(key, key_len) & (capacity - 1);
 
     for (;;) {
         hash_entry *entry = &entries[index];
