@@ -20,7 +20,7 @@ void hashmap_free(hashmap *map);
 bool hashmap_set(
     hashmap *map,
     const char *key,
-    size_t key_len, 
+    size_t key_len,
     void *value);
 void *hashmap_get(
     hashmap *map,
