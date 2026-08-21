@@ -93,10 +93,10 @@ is_digit(const char c)
     return (c >= '0' && c <= 9);
 }
 
-static struct token
+static token
 make_token(token_type type)
 {
-    return (struct token){
+    return (token){
         .type = type,
         .start = lexer_state.start,
         .len = (lexer_state.current - lexer_state.start),
@@ -164,6 +164,7 @@ skip_whitespace(void)
                     
                     break;
                 }
+                break;
             default:
                 return true;
         }
@@ -187,7 +188,7 @@ identifier_type(void)
     return TOKEN_IDENTIFIER;
 }
 
-static struct token
+static token
 identifier(void)
 {
     while (is_alpha(peek()) || is_digit(peek()))
@@ -196,7 +197,7 @@ identifier(void)
     return make_token(identifier_type());
 }
 
-static struct token
+static token
 number(void)
 {
     while(is_digit(peek()))
@@ -220,7 +221,7 @@ lexer_init(const char *source, const char *filename)
     };
 }
 
-struct token
+token
 lexer_next_token(void)
 {
     if (!skip_whitespace()) {

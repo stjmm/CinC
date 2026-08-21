@@ -83,7 +83,7 @@ typedef enum token_type {
 #undef X
 } token_type;
 
-struct token {
+typedef struct {
     token_type type;
 
     const char *start;
@@ -92,9 +92,9 @@ struct token {
     const char *filename;
     size_t line;
     const char *line_start;
-};
+} token;
 
 void lexer_init(const char *source, const char *filename);
-struct token lexer_next_token(void);
+token lexer_next_token(void);
 
 #endif

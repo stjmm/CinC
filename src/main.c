@@ -5,7 +5,7 @@
 int main
 (int argc, const char **argv)
 {
-    const char *prog = "int main()\n {\n int a = 5; \n}";
+    const char *prog = "int main(void)\n {\n int a = 5; \n}";
     lexer_init(prog, "foo.c");
 
     const char *token_names[] = {
@@ -14,9 +14,10 @@ int main
 #undef X
     };
 
-    struct token tok = lexer_next_token();
+    token tok = lexer_next_token();
     while (tok.type != TOKEN_EOF) {
-        printf("%.*s\n", (int)tok.len, tok.start);
+        printf("%s", token_names[tok.type]);
+        printf(" %.*s\n", (int)tok.len, tok.start);
         tok = lexer_next_token();
     }
 }

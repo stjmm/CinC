@@ -22,7 +22,7 @@ $(BUILD)/%.o: src/%.c
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 $(EXE): $(OBJ)
-	$(CC) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^
 
 -include $(DEP)
 
