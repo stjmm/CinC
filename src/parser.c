@@ -2,8 +2,6 @@
 #include "lexer.h"
 
 typedef struct {
-    lexer lexer;
-
     token current;
     token previous;
 

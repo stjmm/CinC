@@ -1,8 +1,20 @@
 #ifndef CINC_DIAGNOSTICS_H
 #define CINC_DIAGNOSTICS_H
 
+#include "lexer.h"
+
+#include <stdio.h>
+
 typedef struct {
-    bool had_error;
+    FILE *out;
+    size_t error_count;
 } diagnostics;
+
+void diagnostics_init(diagnostics *diag, FILE *out);
+void diagnostics_error(
+    diagnostics *diag,
+    const token *tok,
+    const char *format,
+    ...);
 
 #endif

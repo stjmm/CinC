@@ -1,4 +1,5 @@
 #include "lexer.h"
+#include "diagnostics.h"
 
 #include <stdio.h>
 
@@ -20,4 +21,9 @@ int main
         printf(" %.*s\n", (int)tok.len, tok.start);
         tok = lexer_next_token();
     }
+
+    diagnostics diag;
+    diagnostics_init(&diag, stderr);
+
+    return 0;
 }
