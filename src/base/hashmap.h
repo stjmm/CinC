@@ -1,5 +1,5 @@
-#ifndef CINC_HASH_MAP
-#define CINC_HASH_MAP
+#ifndef CINC_HASHMAP_H
+#define CINC_HASHMAP_H
 
 #include <stddef.h>
 
@@ -17,7 +17,7 @@ typedef struct {
 
 void hashmap_init(hashmap *map);
 void hashmap_free(hashmap *map);
-bool hashmap_set(
+void hashmap_set(
     hashmap *map,
     const char *key,
     size_t key_len,

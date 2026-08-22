@@ -77,7 +77,7 @@
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  
 
-typedef enum token_type {
+typedef enum {
 #define X(token_type) token_type,
     TOKEN_LIST
 #undef X

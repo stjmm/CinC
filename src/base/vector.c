@@ -1,4 +1,5 @@
 #include "vector.h"
+#include "memory.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,7 @@ vector_grow(vector *vec)
     size_t new_capacity =
         vec->capacity ? vec->capacity * 2 : VECTOR_INITIAL_CAPACITY;
 
-    void *data = realloc(vec->data, new_capacity);
+    void *data = xrealloc(vec->data, new_capacity);
     if (!data)
         return false;
 

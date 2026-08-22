@@ -9,6 +9,13 @@ typedef struct {
     bool panic;
 } parser;
 
+static parser parser_state;
+
+static void
+parser_advance(void)
+{
+}
+
 ast_program *
 parse_translation_unit(
     const char *source,
@@ -16,11 +23,9 @@ parse_translation_unit(
     diagnostics *diag
 )
 {
-    parser parser = {
+    parser_state = (parser){
         .diag = diag
     };
 
     lexer_init(source, filename);
-
-
 }

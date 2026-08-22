@@ -1,4 +1,5 @@
 #include "hashmap.h"
+#include "memory.h"
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -44,14 +45,11 @@ find_entry(
     }
 }
 
-static bool
+static void
 resize(hashmap *map, size_t new_capacity)
 {
     hash_entry *new_entries =
-        calloc(new_capacity, sizeof(hash_entry));
-
-    if (!new_entries)
-        return false;
+        xcalloc(new_capacity, sizeof(hash_entry));
 
     for (size_t i = 0; i < map->capacity; i++) {
         hash_entry *entry = &map->entries[i];
@@ -72,8 +70,6 @@ resize(hashmap *map, size_t new_capacity)
 
     map->capacity = new_capacity;
     map->entries = new_entries;
-
-    return true;
 }
 
 void
@@ -82,7 +78,7 @@ hashmap_init(hashmap *map)
     *map = (hashmap){0};
 
     map->entries =
-        calloc(HASHMAP_INITIAL_CAPACITY, sizeof(hash_entry));
+        xcalloc(HASHMAP_INITIAL_CAPACITY, sizeof(hash_entry));
 
     map->capacity = HASHMAP_INITIAL_CAPACITY;
 }
@@ -94,7 +90,7 @@ hashmap_free(hashmap *map)
     *map = (hashmap){0};
 }
 
-bool
+void
 hashmap_set(
     hashmap *map,
     const char *key,
@@ -102,8 +98,7 @@ hashmap_set(
     void *value)
 {
     if ((map->count + 1) * 4 >= map->capacity * 3) {
-        if (!resize(map, map->capacity * 2))
-            return false;
+        resize(map, map->capacity * 2)
     }
 
     hash_entry *entry = find_entry(
@@ -119,7 +114,6 @@ hashmap_set(
     }
 
     entry->value = value;
-    return true;
 }
 
 void *

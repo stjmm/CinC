@@ -16,5 +16,6 @@ void diagnostics_error(
     const token *tok,
     const char *format,
     ...);
+bool diagnostics_had_error(diagnostics *diag);
 
 #endif

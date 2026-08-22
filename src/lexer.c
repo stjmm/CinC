@@ -30,16 +30,16 @@ static const keyword KEYWORDS[] = {
     {"while",    5, TOKEN_WHILE},
 };
 
-struct lexer {
+typedef struct {
     const char *start;
     const char *current;
     const char *line_start;
     size_t line;
 
     const char *filename;
-};
+} lexer;
 
-static struct lexer lexer_state;
+static lexer lexer_state;
 
 static bool
 is_at_end(void)
@@ -132,41 +132,41 @@ skip_whitespace(void)
 {
     for (;;) {
         switch(peek()) {
-            case ' ':
-            case '\r':
-            case '\t':
-            case '\v':
-            case '\f':
+        case ' ':
+        case '\r':
+        case '\t':
+        case '\v':
+        case '\f':
+            advance();
+            break;
+        case '\n':
+            advance();
+            lexer_state.line++;
+            lexer_state.line_start = lexer_state.current;
+            break;
+        case '/':
+            if (peek_next() == '/') {
                 advance();
-                break;
-            case '\n':
                 advance();
-                lexer_state.line++;
-                lexer_state.line_start = lexer_state.current;
+
+                while (!is_at_end() && peek() != '\n')
+                    advance();
+
                 break;
-            case '/':
-                if (peek_next() == '/') {
-                    advance();
-                    advance();
+            }
 
-                    while (!is_at_end() && peek() != '\n')
-                        advance();
+            if (peek_next() == '*') {
+                advance();
+                advance();
 
-                    break;
-                }
-
-                if (peek_next() == '*') {
-                    advance();
-                    advance();
-
-                    if (!skip_block_comments())
-                        return false;
-                    
-                    break;
-                }
+                if (!skip_block_comments())
+                    return false;
+                
                 break;
-            default:
-                return true;
+            }
+            break;
+        default:
+            return true;
         }
     }
 }
@@ -212,7 +212,7 @@ number(void)
 void
 lexer_init(const char *source, const char *filename)
 {
-    lexer_state = (struct lexer){
+    lexer_state = (lexer){
         .start = source,
         .current = source,
         .line_start = source,

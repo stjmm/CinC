@@ -2,7 +2,7 @@
 #define CINC_AST_H
 
 #include "lexer.h"
-#include "util/list.h"
+#include "base/list.h"
 
 #include <stdint.h>
 
@@ -182,7 +182,7 @@ typedef struct {
         ast_expr *expr;
         LIST(ast_decl) decls;
     };
-} for_init;
+} ast_for_init;
 
 /*
  * Statements
@@ -240,7 +240,7 @@ struct ast_stmt {
         } continue_stmt;
 
         struct {
-            for_init *init;
+            ast_for_init *init;
             ast_expr *condition;
             ast_expr *post;
             ast_stmt *body;
@@ -304,6 +304,10 @@ struct ast_program{
     LIST(ast_decl) decls;
 };
 
-void ast_expr_new(expr_kind kind, token tok);
+ast_expr *ast_new_expr(expr_kind kind, token tok);
+ast_stmt *ast_stmt_new(stmt_kind kind, token tok);
+ast_decl *ast_decl_new(decl_kind kind, token tok);
+ast_block_item *ast_block_item_new(block_item_kind kind, token tok);
+ast_for_init *ast_for_init_new(for_init_kind kind);
 
 #endif

@@ -28,14 +28,13 @@ print_diagnostic(
 
     fprintf(
         diag->out,
-        " %d %.*s\n",
-        (int)tok->line,
+        " %.*s\n",
         (int)(line_end - tok->line_start),
         tok->line_start);
 
-    fprintf(diag->out, " %.*s", (int)column, "");
+    fprintf(diag->out, " %*s", (int)column, "");
 
-    for (int i = 0; i < (tok->len > 0 ? tok->len : 1); i++)
+    for (size_t i = 0; i < (tok->len > 0 ? tok->len : 1); i++)
         fputc('^', diag->out);
 
     fputc('\n', diag->out);
@@ -45,7 +44,8 @@ void
 diagnostics_init(diagnostics *diag, FILE *out)
 {
     *diag = (diagnostics){
-        .out = out,
+        .error_count = 0,
+        .out = out
     };
 }
 
@@ -68,4 +68,10 @@ diagnostics_error(
         args);
 
     va_end(args);
+}
+
+bool
+diagnostics_had_error(diagnostics *diag)
+{
+    return diag->error_count != 0;
 }
