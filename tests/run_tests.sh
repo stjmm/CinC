@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+
+VERBOSE=false
+CHAPTER=""
+
+COMPILER=gcc
+PASS=0
+FAIL=0
+
+GREEN=$'\033[32m'
+RED=$'\033[31m'
+YELLOW=$'\033[33m'
+ENDCOLOR=$'\033[0m'
+
+usage() {
+    echo "Usage: $0 [-h] [-v] [-c <chapter>]"
+}
+
+OPTS=$(getopt -o vc:h -- "$@") || {
+    usage >&2
+    exit 1
+}
+eval set -- "$OPTS"
+
+while true; do
+    case "$1" in
+        -v)
+            VERBOSE=true
+            shift
+            ;;
+
+        -c)
+            CHAPTER="$2"
+            shift 2
+            ;;
+
+        -h)
+            usage
+            exit 0
+            ;;
+
+        --)
+            shift
+            break
+            ;;
+    esac
+done
+
+TEST_DIR="$(cd "$(dirname $0)" && pwd)"
+
+TMP_DIR=$(mktemp -d) || exit 1
+trap "rm -rf $TMP_DIR" EXIT
+
+pass() {
+    printf '%s[PASS]%s %s\n' "$GREEN" "$ENDCOLOR" "$1"
+}
+
+fail() {
+    printf '%s[FAIL]%s %s\n' "$RED" "$ENDCOLOR" "$1"
+}
+
+run_test() {
+    local source="$1"
+    local library_source="${2:-}"
+
+    local filename
+    local expected
+    local expected_raw
+    local should_fail=false
+    local exe
+    local compile_log
+    local run_log
+    local actual
+
+    filename=$(basename "$source")
+
+    # fail.foo.c
+    if [[ "$filename" == fail.* ]]; then
+        should_fail=true
+    else
+        expected_raw="${filename%%.*}"
+
+        if [[ ! $expected_raw =~ ^[0-9]+$ ]]; then
+            fail "$filename: invalid expected return code"
+            ((FAIL++))
+            return
+        fi
+        expected=$((10#$expected_raw))
+    fi
+
+    exe="$TMP_DIR/test_$((PASS + FAIL))"
+    compile_log="$TMP_DIR/compile_$((PASS + FAIL)).log"
+    run_log="$TMP_DIR/run_$((PASS + FAIL)).log"
+
+    # Compile
+    if [[ -n "$library_source" ]]; then
+        "$COMPILER" "$source" "$library_source" -o "$exe" \
+            >"$compile_log" 2>&1
+    else
+        "$COMPILER" "$source" -o "$exe" \
+            >"$compile_log" 2>&1
+    fi
+
+    compile_status=$?
+
+    # fail.* tests:
+    # compilation failure == PASS
+    if $should_fail; then
+        if (( compile_status != 0 )); then
+            pass "$filename"
+            ((PASS++))
+        else
+            fail "$filename: expected compilation to fail"
+            ((FAIL++))
+        fi
+
+        return
+    fi
+
+    # Normal tests:
+    # compilation failure == FAIL
+    if (( compile_status != 0 )); then
+        fail "$filename: compilation failed"
+
+        if $VERBOSE; then
+            cat "$compile_log"
+        fi
+
+        ((FAIL++))
+        return
+    fi
+
+    # Run
+    "$exe" >"$run_log" 2>&1
+    actual=$?
+
+    if (( actual == expected )); then
+        pass "$filename"
+        ((PASS++))
+    else
+        fail "$filename: expected $expected, but got $actual"
+
+        if $VERBOSE; then
+            cat "$run_log"
+        fi
+
+        ((FAIL++))
+    fi
+}
+
+run_chapter() {
+    local chapter_dir="$1"
+    local source
+    local client
+    local filename
+    local name
+    local library_source
+
+    printf '%s=== %s ===%s\n' \
+        "$YELLOW" "$(basename "$chapter_dir")" "$ENDCOLOR"
+
+    # Normal tests
+    for source in "$chapter_dir"/*.c; do
+        [[ -e "$source" ]] || continue
+
+        run_test "$source"
+    done
+
+    # Library tests
+    for client in "$chapter_dir"/library/*_client.c; do
+        [[ -e "$client" ]] || continue
+
+        filename=$(basename "$client")
+
+        name="${filename#*.}"
+        name="${name%_client.c}"
+
+        library_source="$chapter_dir/library/$name.c"
+
+        if [[ ! -f "$library_source" ]]; then
+            fail "$filename: missing"
+            ((FAIL++))
+            continue
+        fi
+
+        run_test "$client" "$library_source"
+    done
+}
+
+if [[ -n "$CHAPTER" ]]; then
+    if [[ "$CHAPTER" =~ ^chapter[0-9]+$ ]]; then
+        chapter_dir="$TEST_DIR/$CHAPTER"
+
+    elif [[ "$CHAPTER" =~ ^[0-9]+$ ]]; then
+        chapter_dir="$TEST_DIR/$chapter_name"
+
+    else
+        echo "Invalid chapter: $CHAPTER" >&2
+        exit 1
+    fi
+
+    if [[ ! -d "$chapter_dir" ]]; then
+        echo "Chapter does not exist: $chapter_dir" >&2
+        exit 1
+    fi
+
+    run_chapter "$chapter_dir"
+else
+    for chapter_dir in "$TEST_DIR"/chapter[0-9]*; do
+        [[ -d "$chapter_dir" ]] || continue
+
+        run_chapter "$chapter_dir"
+    done
+fi
+
+echo
+printf '%sPassed: %d%s\n' "$GREEN" "$PASS" "$ENDCOLOR"
+printf '%sFailed: %d%s\n' "$RED" "$FAIL" "$ENDCOLOR"
+
+(( FAIL == 0 ))
