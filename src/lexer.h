@@ -94,6 +94,15 @@ typedef struct {
     const char *line_start;
 } token;
 
+typedef struct {
+    const char *start;
+    const char *current;
+    const char *line_start;
+    size_t line;
+
+    const char *filename;
+} lexer;
+
 void lexer_init(const char *source, const char *filename);
 token lexer_next_token(void);
 

@@ -16,7 +16,7 @@ xmalloc(size_t size)
     void *p = malloc(size);
 
     if (!p && size != 0) {
-        fatal("fatal: malloc failed");
+        fatal("error: malloc failed\n");
     }
 
     return p;
@@ -28,7 +28,7 @@ xcalloc(size_t count, size_t size)
     void *p = calloc(count, size);
 
     if (!p && count != 0 && size != 0) {
-        fatal("fatal: calloc failed");
+        fatal("error: calloc failed\n");
     }
 
     return p;
@@ -40,7 +40,7 @@ xrealloc(void *ptr, size_t new_size)
     void *p = realloc(ptr, new_size);
 
     if (!p && new_size != 0) {
-        fatal("fatal: realloc failed");
+        fatal("error: realloc failed\n");
     }
 
     return p;

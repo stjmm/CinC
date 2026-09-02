@@ -98,7 +98,7 @@ hashmap_set(
     void *value)
 {
     if ((map->count + 1) * 4 >= map->capacity * 3) {
-        resize(map, map->capacity * 2)
+        resize(map, map->capacity * 2);
     }
 
     hash_entry *entry = find_entry(

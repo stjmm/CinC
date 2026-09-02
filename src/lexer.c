@@ -30,15 +30,6 @@ static const keyword KEYWORDS[] = {
     {"while",    5, TOKEN_WHILE},
 };
 
-typedef struct {
-    const char *start;
-    const char *current;
-    const char *line_start;
-    size_t line;
-
-    const char *filename;
-} lexer;
-
 static lexer lexer_state;
 
 static bool
