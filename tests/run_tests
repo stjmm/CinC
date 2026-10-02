@@ -3,7 +3,7 @@
 VERBOSE=false
 CHAPTER=""
 
-COMPILER=gcc
+COMPILER="${COMPILER:-$(cd "$(dirname "$0")/.." && pwd)/build/cinc}"
 PASS=0
 FAIL=0
 
@@ -192,7 +192,7 @@ if [[ -n "$CHAPTER" ]]; then
         chapter_dir="$TEST_DIR/$CHAPTER"
 
     elif [[ "$CHAPTER" =~ ^[0-9]+$ ]]; then
-        chapter_dir="$TEST_DIR/$chapter_name"
+        chapter_dir="$TEST_DIR/chapter$CHAPTER"
 
     else
         echo "Invalid chapter: $CHAPTER" >&2

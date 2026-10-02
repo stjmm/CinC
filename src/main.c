@@ -1,5 +1,7 @@
-#include "lexer.h"
 #include "diagnostics.h"
+#include "parser.h"
+#include "sema.h"
+#include "base/memory.h"
 #include "base/vector.h"
 
 #include <stdio.h>
@@ -8,11 +10,9 @@
 
 static bool opt_c;
 static bool opt_S;
-static char *output_file;
+static const char *output_file;
 
 static vector input_files;
-
-static const char *current_filename;
 
 static void
 fatal(const char *message)
@@ -24,7 +24,7 @@ fatal(const char *message)
 static void
 usage(void)
 {
-    fprintf(stderr, 
+    fprintf(stderr,
             "Usage: cinc [options] <file1 file2...>\n"
             "Options:\n"
             "   -S          Stop after assembly (.s)\n"
@@ -36,17 +36,22 @@ usage(void)
 static char *
 read_file(const char *filename)
 {
-    FILE *file = fopen(filename, "r");
+    FILE *file = fopen(filename, "rb");
     if (!file) {
-        fatal("error: opening a file failed");
+        fprintf(stderr, "error: cannot open '%s'\n", filename);
+        exit(EXIT_FAILURE);
     }
 
     fseek(file, 0, SEEK_END);
-    size_t file_size = ftell(file);
+    long file_size = ftell(file);
+    if (file_size < 0) {
+        fprintf(stderr, "error: cannot read '%s'\n", filename);
+        exit(EXIT_FAILURE);
+    }
     rewind(file);
 
-    char *buffer = malloc(file_size + 1);
-    size_t bytes_read = fread(buffer, sizeof(char), file_size, file);
+    char *buffer = xmalloc((size_t)file_size + 1);
+    size_t bytes_read = fread(buffer, 1, (size_t)file_size, file);
     buffer[bytes_read] = '\0';
 
     fclose(file);
@@ -58,72 +63,67 @@ run_command(const char *cmd)
 {
     int status = system(cmd);
     if (status != 0) {
-        fatal("error: command failed\n");
+        fatal("error: command failed");
     }
 }
 
-char *
+static char *
 replace_ext(const char *path, const char *new_ext)
 {
     const char *base = strrchr(path, '/');
     base = base ? base + 1 : path;
 
-    const char *dot = strrchr(path, '.');
+    const char *dot = strrchr(base, '.');
 
-    size_t filename_len;
-    if (dot)
-        filename_len = (size_t)(dot - base);
-    else
-        filename_len = strlen(base);
+    size_t filename_len = dot ? (size_t)(dot - base) : strlen(base);
 
-    size_t new_size = filename_len + strlen(new_ext) + 1;
-    char *new_name = malloc(new_size);
-    
+    char *new_name = xmalloc(filename_len + strlen(new_ext) + 1);
+
     memcpy(new_name, base, filename_len);
     strcpy(new_name + filename_len, new_ext);
 
     return new_name;
 }
-static bool compile_to_asm(const char *filename, const char *out_file)
+
+static char *
+xstrdup(const char *s)
 {
-    current_filename = filename;
-    char *source = read_file(filename);
-
-    struct ast_program *root = parse_translation_unit(source);
-    if (!root) {
-        had_error = true;
-        return false;
-    }
-
-    root = sema_analysis(root);
-    if (!root) {
-        had_error = true;
-        return false;
-    }
-
-    struct ir_program *program = build_ir(root);
-    if (!program) {
-        had_error = true;
-        return false;
-    }
-
-    FILE *out_f = fopen(out_file, "w");
-    emit_x86(program, out_f);
-
-    fclose(out_f);
-    free(source);
-    return true;
+    size_t len = strlen(s) + 1;
+    return memcpy(xmalloc(len), s, len);
 }
 
-static char *compile_file(const char *filename)
+static bool
+compile_to_asm(const char *filename, const char *out_file)
+{
+    char *source = read_file(filename);
+
+    ast_program_t *program = parse_translation_unit(source, filename);
+    if (!program)
+        return false;
+
+    sema_result_t result;
+    if (!sema_analyze(&result, program))
+        return false;
+
+    // TODO: ir_build(&result), then emit assembly into out_file
+    (void)out_file;
+    fprintf(stderr, "%s: error: code generation is not implemented yet\n",
+            filename);
+    return false;
+}
+
+static char *
+compile_file(const char *filename)
 {
     if (opt_S) {
-        char *asm_file = opt_o ? strdup(opt_o) : replace_ext(filename, ".s");
+        char *asm_file = output_file
+            ? xstrdup(output_file)
+            : replace_ext(filename, ".s");
 
         if (!compile_to_asm(filename, asm_file)) {
             remove(asm_file);
             free(asm_file);
-            return NULL;
+            return nullptr;
         }
 
         return asm_file;
@@ -131,20 +131,20 @@ static char *compile_file(const char *filename)
 
     char *asm_file = replace_ext(filename, ".s");
 
-    char *obj_file = (opt_c && opt_o)
-        ? strdup(opt_o)
+    char *obj_file = (opt_c && output_file)
+        ? xstrdup(output_file)
         : replace_ext(filename, ".o");
 
     if (!compile_to_asm(filename, asm_file)) {
         remove(asm_file);
         free(asm_file);
         free(obj_file);
-        return NULL;
+        return nullptr;
     }
 
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "cc -c %s -o %s", asm_file, obj_file);
-    run_cmd(cmd);
+    run_command(cmd);
 
     remove(asm_file);
     free(asm_file);
@@ -152,37 +152,39 @@ static char *compile_file(const char *filename)
     return obj_file;
 }
 
-static void link_files(char **objects)
+static void
+link_files(const vector *objects)
 {
-    const char *out = opt_o ? opt_o : "a.out";
+    const char *out = output_file ? output_file : "a.out";
 
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "cc");
 
-    for (int i = 0; i < input_file_count; i++) {
+    for (size_t i = 0; i < objects->count; i++) {
         strncat(cmd, " ", sizeof(cmd) - strlen(cmd) - 1);
-        strncat(cmd, objects[i], sizeof(cmd) - strlen(cmd) - 1);
+        strncat(cmd, *VECTOR_GET(objects, char *, i),
+                sizeof(cmd) - strlen(cmd) - 1);
     }
 
     strncat(cmd, " -o ", sizeof(cmd) - strlen(cmd) - 1);
     strncat(cmd, out, sizeof(cmd) - strlen(cmd) - 1);
 
-    run_cmd(cmd);
+    run_command(cmd);
 }
 
 static void
 parse_args(int argc, char **argv)
 {
+    VECTOR_INIT(&input_files, const char *);
+
     if (argc < 2)
         usage();
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
-        if (!strcmp(arg, "--help")) {
+        if (!strcmp(arg, "--help"))
             usage();
-            continue;
-        }
 
         if (!strcmp(arg, "-c")) {
             opt_c = true;
@@ -198,39 +200,65 @@ parse_args(int argc, char **argv)
             if (argc <= i + 1) {
                 fprintf(stderr, "error: '-o' requires a filename\n");
                 usage();
-                exit(EXIT_FAILURE);
             }
 
             output_file = argv[++i];
             continue;
         }
 
-        if(!vector_push(&input_files, &arg)) {
-            fatal("error: out of memory\n");
-        }
+        vector_push(&input_files, &arg);
     }
 
-    if (input_files.count == 0){
-        fatal("error: no input files\n");
-    }
+    if (input_files.count == 0)
+        fatal("error: no input files");
 
-    if (opt_S && opt_c) {
-        fatal("error: cannot use '-c' and '-S' together\n");
-    }
+    if (opt_S && opt_c)
+        fatal("error: cannot use '-c' and '-S' together");
 
-    if (output_file && input_files.count > 1 &&
-        (opt_S && opt_c)) {
-        fatal("error: cannot use '-o' with multiple input files"
-                "when using '-c' or '-S'\n");
+    if (output_file && input_files.count > 1 && (opt_S || opt_c)) {
+        fatal("error: cannot use '-o' with multiple input files "
+              "when using '-c' or '-S'");
     }
 }
 
-int main
-(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
     parse_args(argc, argv);
+    diagnostics_init(stderr);
 
+    vector objects;
+    VECTOR_INIT(&objects, char *);
 
+    bool failed = false;
 
-    return 0;
+    for (size_t i = 0; i < input_files.count; i++) {
+        const char *filename = *VECTOR_GET(&input_files, const char *, i);
+        char *out = compile_file(filename);
+
+        if (!out) {
+            failed = true;
+            continue;
+        }
+
+        vector_push(&objects, &out);
+    }
+
+    if (!failed && !opt_c && !opt_S)
+        link_files(&objects);
+
+    // Linking consumed the temporary objects; -c keeps them
+    for (size_t i = 0; i < objects.count; i++) {
+        char *obj = *VECTOR_GET(&objects, char *, i);
+
+        if (!opt_c && !opt_S)
+            remove(obj);
+
+        free(obj);
+    }
+
+    vector_free(&objects);
+    vector_free(&input_files);
+
+    return failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

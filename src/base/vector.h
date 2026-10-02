@@ -17,9 +17,9 @@ typedef struct {
     (&((type *)(vec)->data)[index])
 
 #define VECTOR_GET_LAST(vec, type) \
-    (&((type *)(vec)->data)[(vec).count - 1])
+    (&((type *)(vec)->data)[(vec)->count - 1])
 
-bool vector_push(vector *vec, const void *elem);
+void vector_push(vector *vec, const void *elem);
 void vector_pop(vector *vec);
 void vector_free(vector *vec);
 

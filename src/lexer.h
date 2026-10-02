@@ -78,13 +78,13 @@
     X(TOKEN_EOF)                  
 
 typedef enum {
-#define X(token_type) token_type,
+#define X(token_kind) token_kind,
     TOKEN_LIST
 #undef X
-} token_type;
+} token_kind;
 
 typedef struct {
-    token_type type;
+    token_kind kind;
 
     const char *start;
     size_t len;
@@ -92,18 +92,10 @@ typedef struct {
     const char *filename;
     size_t line;
     const char *line_start;
-} token;
-
-typedef struct {
-    const char *start;
-    const char *current;
-    const char *line_start;
-    size_t line;
-
-    const char *filename;
-} lexer;
+} token_t;
 
 void lexer_init(const char *source, const char *filename);
-token lexer_next_token(void);
+token_t lexer_peek_token(void);
+token_t lexer_next_token(void);
 
 #endif

@@ -6,15 +6,13 @@
 
 #include <stdint.h>
 
-typedef struct ast_expr ast_expr;
-typedef struct ast_decl ast_decl;
-typedef struct ast_stmt ast_stmt;
-typedef struct ast_block_item ast_block_item;
-typedef struct ast_program ast_program;
+typedef struct ast_expr_t ast_expr_t;
+typedef struct ast_decl_t ast_decl_t;
+typedef struct ast_stmt_t ast_stmt_t;
+typedef struct ast_program_t ast_program_t;
 
-typedef struct type type;
-typedef struct symbol symbol;
-typedef struct switch_annotation switch_annotation;
+typedef struct type_t type_t;
+typedef struct symbol_t symbol_t;
 
 /*
  * Expressions
@@ -34,53 +32,54 @@ typedef enum {
     EXPR_CAST
 } expr_kind;
 
-struct ast_expr {
+struct ast_expr_t {
     expr_kind kind;
-    token tok;
-    ast_expr *next;
+    token_t tok;
+    ast_expr_t *next;
 
-    type *ty;
+    /* Sema filled */
+    type_t *ty;
     bool is_lvalue;
 
     union {
         int64_t constant_value;
 
         struct {
-            token name;
-            symbol *sym;
+            token_t name;
+            symbol_t *sym;
         } identifier;
 
         struct {
-            token op;
-            ast_expr *operand;
+            token_t op;
+            ast_expr_t *operand;
         } unary;
 
         struct {
-            token op;
-            ast_expr *left;
-            ast_expr *right;
+            token_t op;
+            ast_expr_t *left;
+            ast_expr_t *right;
         } binary;
 
         struct {
-            token op;
-            ast_expr *lvalue;
-            ast_expr *rvalue;
+            token_t op;
+            ast_expr_t *lvalue;
+            ast_expr_t *rvalue;
         } assignment;
 
         struct {
-            ast_expr *condition;
-            ast_expr *then_expr;
-            ast_expr *else_expr;
+            ast_expr_t *condition;
+            ast_expr_t *then_expr;
+            ast_expr_t *else_expr;
         } conditional;
 
         struct {
-            ast_expr *callee;
-            LIST(ast_expr) args;
+            ast_expr_t *callee;
+            LIST(ast_expr_t) args;
         } call;
 
         struct {
-            type *target_ty;
-            ast_expr *operand;
+            type_t *target_ty;
+            ast_expr_t *operand;
         } cast;
     };
 };
@@ -115,74 +114,37 @@ typedef enum {
     LINKAGE_EXTERNAL
 } linkage;
 
-struct ast_decl {
+struct ast_decl_t {
     decl_kind kind;
-    token tok;
-    ast_decl *next;
+    token_t name;
+    ast_decl_t *next;
 
-    type *ty;
+    type_t *ty;
 
+    /* Parsed */
     storage_class sc;
+    bool is_parameter;
+
+    /* Sema filled */
     storage_duration sd;
     linkage link;
 
     bool is_definition;
     bool is_tentative;
-    bool is_parameter;
 
-    symbol *sym;
-    char *ir_name;
+    symbol_t *sym;
 
     union {
         struct {
-            ast_expr *init;
+            ast_expr_t *init;
         } object;
 
         struct {
-            LIST(ast_decl) params;
-            ast_stmt *body;
+            LIST(ast_decl_t) params;
+            ast_stmt_t *body;
         } function;
     };
 };
-
-/*
- * Block items
- */
-
-typedef enum {
-    BLOCK_ITEM_DECL,
-    BLOCK_ITEM_STMT
-} block_item_kind;
-
-struct ast_block_item {
-    block_item_kind kind;
-    token tok;
-    ast_block_item *next;
-
-    union {
-        ast_stmt *stmt;
-        ast_decl *decl;
-    };
-};
-
-/*
- * For initializers
- */
-
-typedef enum {
-    FOR_INIT_NONE,
-    FOR_INIT_EXPR,
-    FOR_INIT_DECL
-} for_init_kind;
-
-typedef struct {
-    for_init_kind kind;
-
-    union {
-        ast_expr *expr;
-        LIST(ast_decl) decls;
-    };
-} ast_for_init;
 
 /*
  * Statements
@@ -203,95 +165,90 @@ typedef enum {
     STMT_CASE,
     STMT_DEFAULT,
     STMT_RETURN,
-    STMT_BLOCK
+    STMT_BLOCK,
+    STMT_DECL
 } stmt_kind;
 
-struct ast_stmt {
+struct ast_stmt_t {
     stmt_kind kind;
-    token tok;
-    ast_stmt *next;
+    token_t tok;
+    ast_stmt_t *next;
+
+    /* Unique id for labels */
+    uint32_t id;
 
     union {
         struct {
-            ast_expr *expr;
+            ast_expr_t *expr;
         } expr;
 
         struct {
-            ast_expr *condition;
-            ast_stmt *then_stmt;
-            ast_stmt *else_stmt;
+            ast_expr_t *condition;
+            ast_stmt_t *then_stmt;
+            ast_stmt_t *else_stmt;
         } if_stmt;
 
         struct {
-            token label;
+            token_t label;
+
+            /* Sema filled */
+            ast_stmt_t *target;
         } goto_stmt;
 
         struct {
-            token name;
-            ast_stmt *stmt;
-        } label;
+            token_t label;
+            ast_stmt_t *stmt;
+        } label_stmt;
 
         struct {
-            const char *target_label;
-        } break_stmt;
+            ast_stmt_t *init;
+            ast_expr_t *condition;
+            ast_expr_t *post;
+            ast_stmt_t *body;
+        } loop;
 
         struct {
-            const char *target_label;
-        } continue_stmt;
+            ast_expr_t *condition;
+            ast_stmt_t *body;
 
-        struct {
-            ast_for_init *init;
-            ast_expr *condition;
-            ast_expr *post;
-            ast_stmt *body;
-
-            const char *break_label;
-            const char *continue_label;
-        } for_stmt;
-
-        struct {
-            ast_expr *condition;
-            ast_stmt *body;
-
-            const char *break_label;
-            const char *continue_label;
-        } while_stmt;
-
-        struct {
-            ast_expr *condition;
-            ast_stmt *body;
-
-            const char *break_label;
-            const char *continue_label;
-        } dowhile_stmt;
-
-        struct {
-            ast_expr *condition;
-            ast_stmt *body;
-
-            const char *break_label;
-            switch_annotation *annotation;
+            /* Sema filled */
+            ast_stmt_t *cases;
+            ast_stmt_t *default_case;
         } switch_stmt;
 
         struct {
-            ast_expr *value;
-            ast_stmt *stmt;
+            ast_expr_t *expr;
+            ast_stmt_t *stmt;
 
-            const char *label;
+            /* Sema filled */
+            int64_t value;
+            ast_stmt_t *next_case;
         } case_stmt;
 
         struct {
-            ast_stmt *stmt;
-
-            const char *label;
+            ast_stmt_t *stmt;
         } default_stmt;
 
         struct {
-            ast_expr *expr;
+            /* Sema filled */
+            ast_stmt_t *target;
+        } break_stmt;
+
+        struct {
+            /* Sema filled */
+            ast_stmt_t *target;
+        } continue_stmt;
+
+        struct {
+            ast_expr_t *expr;
         } return_stmt;
 
         struct {
-            LIST(ast_block_item) items;
+            LIST(ast_decl_t) decls;
+        } decl;
+
+        struct {
+            LIST(ast_stmt_t) items;
         } block;
     };
 };
@@ -300,14 +257,13 @@ struct ast_stmt {
  * Translation unit
  */
 
-struct ast_program{
-    LIST(ast_decl) decls;
+struct ast_program_t {
+    LIST(ast_decl_t) decls;
 };
 
-ast_expr *ast_new_expr(expr_kind kind, token tok);
-ast_stmt *ast_stmt_new(stmt_kind kind, token tok);
-ast_decl *ast_decl_new(decl_kind kind, token tok);
-ast_block_item *ast_block_item_new(block_item_kind kind, token tok);
-ast_for_init *ast_for_init_new(for_init_kind kind);
+ast_program_t *ast_program_new(void);
+ast_expr_t *ast_expr_new(expr_kind kind, token_t tok);
+ast_stmt_t *ast_stmt_new(stmt_kind kind, token_t tok);
+ast_decl_t *ast_decl_new(decl_kind kind, token_t tok);
 
 #endif

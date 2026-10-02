@@ -17,7 +17,7 @@
         if ((list)->tail)                \
             (list)->tail->next = (node); \
         else                             \
-            (list)->tail = (node);       \
+            (list)->head = (node);       \
                                          \
         (list)->tail = (node);           \
     } while (0)
@@ -31,8 +31,22 @@
             (list)->tail = (node);   \
     } while(0)
 
-#define LIST_FOREACH(list)                          \
-    for (typeof((list)->head) *node = (list)->head; \
-            node != nullptr; node = node->next)
+#define LIST_CONCAT(dst, src) \
+    do {                                         \
+        if ((src)->head) {                       \
+            if ((dst)->tail)                     \
+                (dst)->tail->next = (src)->head; \
+            else                                 \
+                (dst)->head = (src)->head;       \
+                                                 \
+            (dst)->tail = (src)->tail;           \
+        }                                        \
+                                                 \
+        LIST_INIT(src);                          \
+    } while (0)
+
+#define LIST_FOREACH(it, list)                   \
+    for (typeof((list)->head) it = (list)->head; \
+            it != nullptr; it = it->next)
 
 #endif

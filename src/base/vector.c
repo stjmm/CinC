@@ -6,20 +6,14 @@
 
 static constexpr size_t VECTOR_INITIAL_CAPACITY = 16;
 
-static bool
+static void
 vector_grow(vector *vec)
 {
     size_t new_capacity =
         vec->capacity ? vec->capacity * 2 : VECTOR_INITIAL_CAPACITY;
 
-    void *data = xrealloc(vec->data, new_capacity);
-    if (!data)
-        return false;
-
-    vec->data = data;
+    vec->data = xrealloc(vec->data, new_capacity * vec->elem_size);
     vec->capacity = new_capacity;
-
-    return true;
 }
 
 void
@@ -29,21 +23,17 @@ vector_pop(vector *vec)
         vec->count--;
 }
 
-bool
+void
 vector_push(vector *vec, const void *elem)
 {
-    if (vec->count >= vec->capacity &&
-        !vector_grow(vec)) {
-        return false;
-    }
+    if (vec->count >= vec->capacity)
+        vector_grow(vec);
 
     void *dest =
         (char *)vec->data + vec->count * vec->elem_size;
 
     memcpy(dest, elem, vec->elem_size);
     vec->count++;
-
-    return true;
 }
 
 void

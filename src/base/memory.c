@@ -6,7 +6,7 @@
 static void
 fatal(const char *message)
 {
-    fprintf(stderr, "%s\n", message);
+    fprintf(stderr, "%s", message);
     exit(EXIT_FAILURE);
 }
 

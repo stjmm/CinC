@@ -3,12 +3,20 @@
 #include <string.h>
 
 typedef struct {
+    const char *start;
+    const char *current;
+    const char *line_start;
+    size_t line;
+    const char *filename;
+} lexer_t;
+
+typedef struct {
     const char *name;
     size_t len;
-    token_type type;
-} keyword;
+    token_kind type;
+} keyword_t;
 
-static const keyword KEYWORDS[] = {
+static const keyword_t KEYWORDS[] = {
     {"auto",     4, TOKEN_AUTO},
     {"break",    5, TOKEN_BREAK},
     {"case",     4, TOKEN_CASE},
@@ -30,31 +38,31 @@ static const keyword KEYWORDS[] = {
     {"while",    5, TOKEN_WHILE},
 };
 
-static lexer lexer_state;
+static lexer_t lexer;
 
 static bool
 is_at_end(void)
 {
-    return *lexer_state.current == '\0';
+    return *lexer.current == '\0';
 }
 
 static char
 advance(void)
 {
-    lexer_state.current++;
-    return lexer_state.current[-1];
+    lexer.current++;
+    return lexer.current[-1];
 }
 
 static char
 peek(void)
 {
-    return *lexer_state.current;
+    return *lexer.current;
 }
 
 static char
 peek_next(void)
 {
-    return is_at_end() ? '\0' : lexer_state.current[1];
+    return is_at_end() ? '\0' : lexer.current[1];
 }
 
 static bool
@@ -63,10 +71,10 @@ match(const char expected)
     if (is_at_end())
         return false;
 
-    if (*lexer_state.current != expected)
+    if (*lexer.current != expected)
         return false;
 
-    lexer_state.current++;
+    lexer.current++;
     return true;
 }
 
@@ -81,19 +89,19 @@ is_alpha(const char c)
 static bool
 is_digit(const char c)
 {
-    return (c >= '0' && c <= 9);
+    return (c >= '0' && c <= '9');
 }
 
-static token
-make_token(token_type type)
+static token_t
+make_token(token_kind kind)
 {
-    return (token){
-        .type = type,
-        .start = lexer_state.start,
-        .len = (lexer_state.current - lexer_state.start),
-        .filename = lexer_state.filename,
-        .line = lexer_state.line,
-        .line_start = lexer_state.line_start
+    return (token_t){
+        .kind = kind,
+        .start = lexer.start,
+        .len = (lexer.current - lexer.start),
+        .filename = lexer.filename,
+        .line = lexer.line,
+        .line_start = lexer.line_start
     };
 }
 
@@ -107,8 +115,9 @@ skip_block_comments(void)
             advance();
             return true;
         } else if (peek() == '\n') {
-            lexer_state.line++;
-            lexer_state.line_start = lexer_state.current;
+            advance();
+            lexer.line++;
+            lexer.line_start = lexer.current;
             continue;
         }
 
@@ -132,8 +141,8 @@ skip_whitespace(void)
             break;
         case '\n':
             advance();
-            lexer_state.line++;
-            lexer_state.line_start = lexer_state.current;
+            lexer.line++;
+            lexer.line_start = lexer.current;
             break;
         case '/':
             if (peek_next() == '/') {
@@ -155,23 +164,23 @@ skip_whitespace(void)
                 
                 break;
             }
-            break;
+            return true;
         default:
             return true;
         }
     }
 }
 
-static token_type
+static token_kind
 identifier_type(void)
 {
-    size_t keyword_len = lexer_state.current - lexer_state.start;
+    size_t keyword_len = lexer.current - lexer.start;
 
-    for (size_t i = 0; i < sizeof(KEYWORDS) / sizeof(keyword); i++) {
-        const keyword *keyword = &KEYWORDS[i];
+    for (size_t i = 0; i < sizeof(KEYWORDS) / sizeof(keyword_t); i++) {
+        const keyword_t *keyword = &KEYWORDS[i];
 
         if (keyword_len == keyword->len &&
-            memcmp(lexer_state.start, keyword->name, keyword_len) == 0) {
+            memcmp(lexer.start, keyword->name, keyword_len) == 0) {
             return keyword->type;
         }
     }
@@ -179,7 +188,7 @@ identifier_type(void)
     return TOKEN_IDENTIFIER;
 }
 
-static token
+static token_t
 identifier(void)
 {
     while (is_alpha(peek()) || is_digit(peek()))
@@ -188,22 +197,34 @@ identifier(void)
     return make_token(identifier_type());
 }
 
-static token
+static token_t
 number(void)
 {
-    while(is_digit(peek()))
+    while (is_digit(peek()))
         advance();
 
-    if (peek() == 'l' || peek() == 'L')
-        return make_token(TOKEN_LONG_CONSTANT);
+    token_kind kind = TOKEN_INT_CONSTANT;
 
-    return make_token(TOKEN_INT_CONSTANT);
+    if (peek() == 'l' || peek() == 'L') {
+        advance();
+        kind = TOKEN_LONG_CONSTANT;
+    }
+
+    // 123abc, 0lL, 1.5 (no floating constants yet)
+    if (is_alpha(peek()) || is_digit(peek()) || peek() == '.') {
+        while (is_alpha(peek()) || is_digit(peek()) || peek() == '.')
+            advance();
+
+        return make_token(TOKEN_ERROR);
+    }
+
+    return make_token(kind);
 }
 
 void
 lexer_init(const char *source, const char *filename)
 {
-    lexer_state = (lexer){
+    lexer = (lexer_t){
         .start = source,
         .current = source,
         .line_start = source,
@@ -212,14 +233,23 @@ lexer_init(const char *source, const char *filename)
     };
 }
 
-token
+token_t
+lexer_peek_token(void)
+{
+    lexer_t current = lexer;
+    token_t peek = lexer_next_token();
+    lexer = current;
+    return peek;
+}
+
+token_t
 lexer_next_token(void)
 {
     if (!skip_whitespace()) {
-        lexer_state.start = lexer_state.current;
+        lexer.start = lexer.current;
         return make_token(TOKEN_ERROR);
     }
-    lexer_state.start = lexer_state.current;
+    lexer.start = lexer.current;
 
     if (is_at_end())
         return make_token(TOKEN_EOF);
@@ -239,6 +269,10 @@ lexer_next_token(void)
             return make_token(TOKEN_LEFT_BRACE);
         case '}':
             return make_token(TOKEN_RIGHT_BRACE);
+        case '[':
+            return make_token(TOKEN_LEFT_BRACKET);
+        case ']':
+            return make_token(TOKEN_RIGHT_BRACKET);
         case '+':
             if (match('+'))
                 return make_token(TOKEN_PLUS_PLUS);

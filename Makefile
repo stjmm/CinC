@@ -30,7 +30,7 @@ clean:
 	rm -rf $(BUILD)
 
 test: $(EXE)
-	@bash tests/run_tests.sh
+	@bash tests/run_tests
 
 run: all
 	@$(EXE)
