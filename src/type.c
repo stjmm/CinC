@@ -78,3 +78,78 @@ type_is_long(const type_t *ty)
 {
     return ty->kind == TYPE_LONG;
 }
+
+bool
+type_is_function(const type_t *ty)
+{
+    return ty->kind == TYPE_FUNCTION;
+}
+
+bool
+type_is_object(const type_t *ty)
+{
+    return ty && !type_is_function(ty) &&
+        !type_is_void(ty);
+}
+
+bool
+type_is_integer(const type_t *ty)
+{
+    return type_is_int(ty) ||
+        type_is_long(ty);
+}
+
+bool
+type_is_arithmetic(const type_t *ty)
+{
+    return type_is_integer(ty);
+}
+
+bool
+type_is_scalar(const type_t *ty)
+{
+    return type_is_integer(ty);
+}
+
+bool
+type_compatible(const type_t *a, const type_t *b)
+{
+    if (a == b)
+        return true;
+
+    if (!a || !b)
+        return false;
+
+    if (a->kind != b->kind)
+        return false;
+
+    switch (a->kind) {
+        case TYPE_VOID:
+        case TYPE_INT:
+        case TYPE_LONG:
+            return true;
+        case TYPE_FUNCTION:
+            if (!type_compatible(a->function.return_ty,
+                        b->function.return_ty)) {
+                return false;
+            }
+
+            if (a->function.params.count !=
+                    b->function.params.count) {
+                return false;
+            }
+
+            return true;
+    }
+    
+    return false;
+}
+
+type_t *
+type_usual_arithmetic_conversion(type_t *a, type_t *b)
+{
+    if (a == b)
+        return a;
+    else
+        return type_long();
+}

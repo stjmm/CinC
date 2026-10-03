@@ -8,7 +8,7 @@
 void diagnostics_init(FILE *out);
 void diagnostics_error(
     const token_t *tok,
-    const char *format,
+    const char *fmt,
     ...);
 bool diagnostics_had_error(void);
 

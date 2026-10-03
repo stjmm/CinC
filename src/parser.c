@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 #include <errno.h>
+#include <stdarg.h>
 
 typedef struct {
     token_t current;
@@ -51,13 +52,17 @@ typedef struct {
 static parser_t parser;
 
 static void
-error(const token_t *tok, const char *message)
+error(const token_t *tok, const char *fmt, ...)
 {
     if (parser.panic)
         return;
 
     parser.panic = true;
-    diagnostics_error(tok, "%s", message);
+
+    va_list args;
+    va_start(args, fmt);
+    diagnostics_error(tok, fmt, args);
+    va_end(args);
 }
 
 static void
@@ -466,20 +471,20 @@ get_parse_rule(token_kind kind)
 static ast_expr_t *
 parse_expression(precedence_kind prec)
 {
-    advance();
     prefix_parse_fn prefix_fn =
-        get_parse_rule(parser.previous.kind)->prefix;
+        get_parse_rule(parser.current.kind)->prefix;
     if (!prefix_fn) {
-        error(&parser.previous, "Expected expression");
+        error(&parser.current, "Expected expression");
         return nullptr;
     }
 
+    advance();
     ast_expr_t *left = prefix_fn();
 
     while (prec <= get_parse_rule(parser.current.kind)->prec) {
         advance();
         infix_parse_fn infix_fn =
-            get_parse_rule(parser.current.kind)->infix;
+            get_parse_rule(parser.previous.kind)->infix;
         left = infix_fn(left);
     }
 
@@ -562,7 +567,7 @@ parse_statement(void)
         if (is_declaration_start(parser.current.kind)) {
             stmt->loop.init = parse_declaration(false);
         } else if (!match(TOKEN_SEMICOLON)) {
-            ast_stmt_t *init = ast_stmt_new(STMT_EXPR, parser.previous);
+            ast_stmt_t *init = ast_stmt_new(STMT_EXPR, parser.current);
             init->expr.expr = parse_expression(PREC_ASSIGNMENT);
             consume(TOKEN_SEMICOLON, "Expected ';' after 'for' initializer");
             stmt->loop.init = init;
@@ -572,9 +577,9 @@ parse_statement(void)
             stmt->loop.condition = parse_expression(PREC_ASSIGNMENT);
         consume(TOKEN_SEMICOLON, "Expected ';' after 'for' condition");
         
-        if (!check(TOKEN_SEMICOLON))
+        if (!check(TOKEN_RIGHT_PAREN))
             stmt->loop.post = parse_expression(PREC_ASSIGNMENT);
-        consume(TOKEN_SEMICOLON, "Expected ';' after 'for'");
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'for'");
 
         stmt->loop.body = parse_statement();
         return stmt;
@@ -644,7 +649,7 @@ parse_statement(void)
     }
 
     /* Expression statement */
-    ast_stmt_t *stmt = ast_stmt_new(STMT_EXPR, parser.previous);
+    ast_stmt_t *stmt = ast_stmt_new(STMT_EXPR, parser.current);
     stmt->expr.expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
     return stmt;
@@ -662,7 +667,7 @@ parse_block_item(void)
 static ast_stmt_t *
 parse_block(void)
 {
-    ast_stmt_t *block = ast_stmt_new(STMT_BLOCK, parser.previous);
+    ast_stmt_t *block = ast_stmt_new(STMT_BLOCK, parser.current);
     consume(TOKEN_LEFT_BRACE, "Expected '{'");
 
     while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
@@ -781,7 +786,7 @@ parse_parameter_list(ast_decl_t *fn, vector *param_types)
         vector_push(param_types, &param->ty);
     } while(match(TOKEN_COMMA));
 
-    consume(TOKEN_RIGHT_BRACE, "Expected '}' after parameter list");
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after parameter list");
 }
 
 static ast_decl_t *
@@ -838,11 +843,12 @@ parse_init_declarator(decl_specs_t *specs)
 }
 
 /* One declaration: int a, f();
- * Returns STMT_DECL with every decl */
+ * Returns ast_decl_t STMT_DECL 
+ * With a declaration list */
 static ast_stmt_t *
 parse_declaration(bool file_scope)
 {
-    ast_stmt_t *stmt = ast_stmt_new(STMT_DECL, parser.previous);
+    ast_stmt_t *stmt = ast_stmt_new(STMT_DECL, parser.current);
     decl_specs_t specs = parse_declaration_specs();
 
     ast_decl_t *first = parse_init_declarator(&specs);

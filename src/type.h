@@ -48,9 +48,8 @@ bool type_is_arithmetic(const type_t *ty);
 bool type_is_scalar(const type_t *ty);
 
 bool type_compatible(const type_t *a, const type_t *b);
-type_t *type_composite(const type_t *a, const type_t *b);
 type_t *type_usual_arithmetic_conversion(
-    const type_t *a,
-    const type_t *b);
+    type_t *a,
+    type_t *b);
 
 #endif

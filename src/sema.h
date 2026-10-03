@@ -4,6 +4,12 @@
 #include "ast.h"
 
 typedef enum {
+    INIT_NONE,
+    INIT_TENTATIVE,
+    INIT_CONSTANT
+} init_kind;
+
+typedef enum {
     SYMBOL_OBJECT,
     SYMBOL_FUNCTION
 } symbol_kind;
@@ -19,11 +25,10 @@ struct symbol_t {
 
     linkage linkage;
 
+    storage_duration sd;
+    init_kind init;
+    int64_t init_value;
     bool defined;
-    bool tentative_definition;
-
-    bool has_static_initializer;
-    int64_t static_initializer;
 
     symbol_t *next;
 };
