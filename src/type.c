@@ -37,7 +37,7 @@ type_function(
     vector params,
     bool variadic)
 {
-    type_t *ty = xmalloc(sizeof(type_t));
+    type_t *ty = xcalloc(1, sizeof(type_t));
     *ty = (type_t){
         .kind = TYPE_FUNCTION,
         .function = {
@@ -52,13 +52,20 @@ type_function(
 size_t
 type_size(const type_t *ty)
 {
-    (void)ty;
+    switch (ty->kind) {
+        case TYPE_INT:
+            return 4;
+        case TYPE_LONG:
+            return 8;
+        default:
+            return 0;
+    }
 }
 
 size_t
 type_align(const type_t *ty)
 {
-    (void)ty;
+    return type_size(ty);
 }
 
 bool
@@ -137,6 +144,16 @@ type_compatible(const type_t *a, const type_t *b)
             if (a->function.params.count !=
                     b->function.params.count) {
                 return false;
+            }
+
+            for (size_t i = 0; i < a->function.params.count; i++) {
+                type_t *param_a =
+                    *VECTOR_GET(&a->function.params, type_t *, i);
+                type_t *param_b =
+                    *VECTOR_GET(&b->function.params, type_t *, i);
+
+                if (!type_compatible(param_a, param_b))
+                    return false;
             }
 
             return true;

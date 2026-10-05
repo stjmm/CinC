@@ -1,7 +1,5 @@
 #include "diagnostics.h"
 
-#include <stdarg.h>
-
 typedef struct {
     FILE *out;
     size_t error_count;
@@ -59,19 +57,14 @@ void
 diagnostics_error(
     const token_t *tok,
     const char *format,
-    ...)
+    va_list args)
 {
     diag.error_count++;
-
-    va_list args;
-    va_start(args, format);
 
     print_diagnostic(
         tok,
         format,
         args);
-
-    va_end(args);
 }
 
 bool

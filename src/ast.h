@@ -62,6 +62,7 @@ struct ast_expr_t {
 
         struct {
             token_t op;
+            type_t *op_ty;
             ast_expr_t *lvalue;
             ast_expr_t *rvalue;
         } assignment;
