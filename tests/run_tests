@@ -3,7 +3,7 @@
 VERBOSE=false
 CHAPTER=""
 
-COMPILER="${COMPILER:-$(cd "$(dirname "$0")/.." && pwd)/build/cinc}"
+COMPILER=gcc
 PASS=0
 FAIL=0
 

@@ -36,6 +36,7 @@ struct symbol_t {
 typedef struct {
     ast_program_t *program;
     LIST(symbol_t) symbols;
+    size_t symbol_count;
 } sema_result_t;
 
 bool sema_analyze(

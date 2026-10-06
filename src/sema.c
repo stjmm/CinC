@@ -630,7 +630,7 @@ analyze_stmt(ast_stmt_t *stmt)
             ast_stmt_t *saved_breakable = sema.fn_ctx.breakable;
             ast_stmt_t *saved_last_case = sema.fn_ctx.last_case;
             sema.fn_ctx.breakable = stmt;
-            sema.fn_ctx.sw = stmt;
+            sema.fn_ctx.loop = stmt;
             sema.fn_ctx.last_case = nullptr;
 
             analyze_stmt(stmt->switch_stmt.body);
@@ -810,7 +810,7 @@ validate_declaration(ast_decl_t *decl)
 
     /* Validate object */
     if (type_is_void(decl->ty))
-        error(&decl->name, "Object cannot have type 'void'");
+        error(&decl->name, "Objects cannot have type 'void'");
 
     if (!is_global_scope() &&
             decl->sc == STORAGE_CLASS_EXTERN && decl->object.init) {
@@ -1093,13 +1093,14 @@ analyze_declaration_list(ast_stmt_t *stmt)
 }
 
 static void
-finish_tentative_declarations()
+finish_tentative_declarations(sema_result_t *result)
 {
     LIST_FOREACH(sym, &sema.result->symbols) {
         if (sym->init == INIT_TENTATIVE) {
             sym->init = INIT_CONSTANT;
             sym->init_value = 0;
         }
+        result->symbol_count++;
     }
 }
 
@@ -1121,7 +1122,7 @@ sema_analyze(
     LIST_FOREACH(decl, &program->decls)
         analyze_declaration(decl);
 
-    finish_tentative_declarations();
+    finish_tentative_declarations(result);
 
     sema.scope = scope_pop(sema.scope);
     hashmap_free(&sema.linked_symbols);
