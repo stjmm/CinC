@@ -595,6 +595,7 @@ emit_stmt(ast_stmt_t *stmt)
 
             emit_stmt(stmt->switch_stmt.body);
             emit_label(break_label);
+            break;
         }
         case STMT_DEFAULT:
             emit_label(make_label(IR_LABEL_CASE, stmt->id));
@@ -640,7 +641,7 @@ emit_function(ast_decl_t *decl)
 
     LIST_FOREACH(param, &decl->function.params) {
         ir_value_t value = value_object(param->ty, param->sym);
-        vector_push(&function->params, param);
+        vector_push(&function->params, &value);
     }
 
     ir.fn = function;
@@ -668,4 +669,6 @@ ir_build(const sema_result_t *sema)
         if (decl->kind == DECL_FUNCTION && decl->function.body)
             emit_function(decl);
     }
+
+    return program;
 }

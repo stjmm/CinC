@@ -1,6 +1,7 @@
 #include "diagnostics.h"
 #include "parser.h"
 #include "sema.h"
+#include "ir.h"
 #include "base/memory.h"
 #include "base/vector.h"
 
@@ -105,10 +106,8 @@ compile_to_asm(const char *filename, const char *out_file)
     if (!sema_analyze(&result, program))
         return false;
 
-    // TODO: ir_build(&result), then emit assembly into out_file
-    (void)out_file;
-    fprintf(stderr, "%s: error: code generation is not implemented yet\n",
-            filename);
+    ir_program_t *ir_program = ir_build(&result);
+
     return false;
 }
 

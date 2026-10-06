@@ -69,7 +69,8 @@ typedef enum {
     IR_INSTR_JUMP_IF_ZERO,
     IR_INSTR_JUMP_IF_NOT_ZERO,
     IR_INSTR_LABEL,
-    IR_INSTR_CALL
+    IR_INSTR_CALL,
+    IR_INSTR_CAST
 } ir_instr_kind;
 
 typedef struct ir_instr_t ir_instr_t;
