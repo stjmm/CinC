@@ -120,7 +120,7 @@ struct ir_instr_t {
         } label;
 
         struct {
-            symbol_t *calle;
+            symbol_t *callee;
             vector args; // ir_value_t
             ir_value_t dst;
         } call;

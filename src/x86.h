@@ -4,6 +4,7 @@
 #include "ir.h"
 #include "sema.h"
 
+#include <stdio.h>
 #include <stdint.h>
 
 #define ASM_REG_LIST                                           \
@@ -18,7 +19,6 @@
     X(REG_R11,  "r11",   "r11d",  "r11w",  "r11b",  "")        \
     X(REG_SP,   "rsp",   "esp",   "sp",    "spl",   "")        \
     X(REG_BP,   "rbp",   "ebp",   "bp",    "bpl",   "")        \
-    /* Callee-saved: not used until register allocation */     \
     X(REG_BX,   "rbx",   "ebx",   "bx",    "bl",    "bh")      \
     X(REG_R12,  "r12",   "r12d",  "r12w",  "r12b",  "")        \
     X(REG_R13,  "r13",   "r13d",  "r13w",  "r13b",  "")        \
@@ -96,6 +96,7 @@ typedef struct {
         asm_reg reg;
         uint32_t pseudo; // IR pseudo id
         int32_t stack;   // Offset from %rbp
+        symbol_t *data;  // Static-duration variables
     };
 } asm_operand_t;
 
@@ -193,5 +194,10 @@ typedef struct {
     LIST(asm_function_t) fns;
     const sema_result_t *sema;
 } asm_program_t;
+
+bool asm_emit(
+        ir_program_t *ir_program,
+        sema_result_t *sema,
+        FILE *out);
 
 #endif

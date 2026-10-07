@@ -219,10 +219,10 @@ emit_label(ir_label_t label)
 }
 
 static void
-emit_call(symbol_t *calle, vector args, ir_value_t dst)
+emit_call(symbol_t *callee, vector args, ir_value_t dst)
 {
     ir_instr_t *instr = instr_new(IR_INSTR_CALL);
-    instr->call.calle = calle;
+    instr->call.callee = callee;
     instr->call.args = args;
     instr->call.dst = dst;
 }
