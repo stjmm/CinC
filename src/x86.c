@@ -754,7 +754,7 @@ fixup_push(asm_instr_t *instr)
     asm_operand_t src = instr->push.src;
     asm_operand_t r10 = operand_reg(REG_R10);
 
-    if (is_memory_operand(src) || is_large_imm(src)) {
+    if (is_large_imm(src)) {
         emit_mov(instr->size, src, operand_reg(REG_R10));
         src = r10;
     }
