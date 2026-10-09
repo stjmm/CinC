@@ -1,38 +1,24 @@
 #ifndef CINC_AST_H
 #define CINC_AST_H
 
-#include <stdlib.h>
-#include <stdbool.h>
+#include "lexer.h"
+#include "base/list.h"
+
 #include <stdint.h>
 
-#include "lexer.h"
+typedef struct ast_expr_t ast_expr_t;
+typedef struct ast_decl_t ast_decl_t;
+typedef struct ast_stmt_t ast_stmt_t;
+typedef struct ast_program_t ast_program_t;
+
+typedef struct type_t type_t;
+typedef struct symbol_t symbol_t;
 
 /*
- * AST is split into:
- *   - struct program: translation unit
- *   - struct decl:    object/function declaration
- *   - stmt and expr
- *
- * Sema annotates:
- *   - expr->ty
- *   - expr->is_lvalue
- *   - expr identifiers with expr->ident.sym
- *   - decl->sym
- *   - decl->ir_name
- *   - break/continue/switch/case labels
+ * Expressions
  */
 
-#define LIST_APPEND(head, tail, node)  \
-    do {                               \
-        if (!(head))                   \
-            (head) = (node);           \
-        else                           \
-            (tail)->next = (node);     \
-        (tail) = (node);               \
-    } while(0)
-
-
-enum expr_kind {
+typedef enum {
     EXPR_INT_CONSTANT,
     EXPR_LONG_CONSTANT,
     EXPR_IDENTIFIER,
@@ -44,143 +30,128 @@ enum expr_kind {
     EXPR_CONDITIONAL,
     EXPR_CALL,
     EXPR_CAST
-};
+} expr_kind;
 
-struct expr {
-    enum expr_kind kind;
-    struct token tok;
-    struct expr *next; // Arguments list and other expression lists
+struct ast_expr_t {
+    expr_kind kind;
+    token_t tok;
+    ast_expr_t *next;
 
-    // Filled by sema
-    struct type *type;
+    /* Sema filled */
+    type_t *ty;
     bool is_lvalue;
 
     union {
-        int64_t constant_value; // We only have signed integers for now
+        int64_t constant_value;
 
         struct {
-            struct token name;
-            struct symbol *sym;
+            token_t name;
+            symbol_t *sym;
         } identifier;
 
         struct {
-            struct token op;
-            struct expr *operand;
+            token_t op;
+            ast_expr_t *operand;
         } unary;
 
         struct {
-            struct token op;
-            struct expr *left;
-            struct expr *right;
+            token_t op;
+            ast_expr_t *left;
+            ast_expr_t *right;
         } binary;
 
         struct {
-            struct token op;
-            struct expr *lvalue;
-            struct expr *rvalue;
+            token_t op;
+            type_t *op_ty;
+            ast_expr_t *lvalue;
+            ast_expr_t *rvalue;
         } assignment;
 
         struct {
-            struct expr *condition;
-            struct expr *then_expr;
-            struct expr *else_expr;
+            ast_expr_t *condition;
+            ast_expr_t *then_expr;
+            ast_expr_t *else_expr;
         } conditional;
 
         struct {
-            struct expr *callee;
-            struct expr *args;
+            ast_expr_t *callee;
+            LIST(ast_expr_t) args;
         } call;
 
         struct {
-            struct type *target_type;
-            struct expr *operand;
+            type_t *target_ty;
+            ast_expr_t *operand;
         } cast;
     };
 };
 
-enum decl_kind {
+/*
+ * Declarations
+ */
+
+typedef enum {
     DECL_OBJECT,
     DECL_FUNCTION
-};
+} decl_kind;
 
-enum storage_class {
-    SC_NONE,
-    SC_EXTERN,
-    SC_STATIC,
-    SC_AUTO,
-    SC_REGISTER,
-};
+typedef enum {
+    STORAGE_CLASS_NONE,
+    STORAGE_CLASS_EXTERN,
+    STORAGE_CLASS_STATIC,
+    STORAGE_CLASS_AUTO,
+    STORAGE_CLASS_REGISTER
+} storage_class;
 
-enum linkage {
-    LINK_NONE,
-    LINK_INTERNAL,
-    LINK_EXTERNAL
-};
+typedef enum {
+    STORAGE_DURATION_NONE,
+    STORAGE_DURATION_AUTO,
+    STORAGE_DURATION_STATIC,
+    STORAGE_DURATION_THREAD
+} storage_duration;
 
-enum storage_duration {
-    SD_NONE,
-    SD_AUTO,
-    SD_STATIC,
-    SD_THREAD
-};
+typedef enum {
+    LINKAGE_NONE,
+    LINKAGE_INTERNAL,
+    LINKAGE_EXTERNAL
+} linkage;
 
-struct decl {
-    enum decl_kind kind;
-    struct token name;
-    struct decl *next;
+struct ast_decl_t {
+    decl_kind kind;
+    token_t name;
+    ast_decl_t *next;
 
-    struct type *type;
+    type_t *ty;
 
-    enum storage_class storage_class;        // parsed
-    enum linkage linkage;                    // sema-computed
-    enum storage_duration storage_duration;  // sema-computed
+    /* Parsed */
+    storage_class sc;
+    bool is_parameter;
+
+    /* Sema filled */
+    storage_duration sd;
+    linkage link;
 
     bool is_definition;
     bool is_tentative;
-    bool is_parameter;
 
-    struct symbol *sym;
-    char *ir_name;
+    symbol_t *sym;
 
     union {
         struct {
-            struct expr *init;
+            ast_expr_t *init;
         } object;
 
         struct {
-            struct decl *params;
-            struct stmt *body;
-        } func;
+            LIST(ast_decl_t) params;
+            ast_stmt_t *body;
+        } function;
     };
 };
 
-/* Statements / block-items */
+/*
+ * Statements
+ */
 
-enum block_item_kind {
-    BLOCK_ITEM_STMT,
-    BLOCK_ITEM_DECL
-};
-
-struct block_item {
-    enum block_item_kind kind;
-    struct block_item *next;
-    struct token tok;
-
-    union {
-        struct stmt *stmt;
-        struct decl *decls;
-    };
-};
-
-struct for_init {
-    bool is_decl;
-    union {
-        struct expr *expr;
-        struct decl *decls;
-    };
-};
-
-enum stmt_kind {
+typedef enum {
     STMT_NULL,
     STMT_EXPR,
     STMT_IF,
@@ -195,134 +166,105 @@ enum stmt_kind {
     STMT_CASE,
     STMT_DEFAULT,
     STMT_RETURN,
-    STMT_BLOCK
-};
+    STMT_BLOCK,
+    STMT_DECL
+} stmt_kind;
 
-struct stmt {
-    enum stmt_kind kind;
-    struct token tok;
-    struct stmt *next;
+struct ast_stmt_t {
+    stmt_kind kind;
+    token_t tok;
+    ast_stmt_t *next;
+
+    /* Unique id for labels */
+    uint32_t id;
 
     union {
         struct {
-            struct expr *expr;
-        } expr_stmt;
+            ast_expr_t *expr;
+        } expr;
 
         struct {
-            struct expr *condition;
-            struct stmt *then_stmt;
-            struct stmt *else_stmt;
+            ast_expr_t *condition;
+            ast_stmt_t *then_stmt;
+            ast_stmt_t *else_stmt;
         } if_stmt;
 
         struct {
-            struct token label;
+            token_t label;
+
+            /* Sema filled */
+            ast_stmt_t *target;
         } goto_stmt;
 
         struct {
-            struct token name;
-            struct stmt *stmt;
+            token_t label;
+            ast_stmt_t *stmt;
         } label_stmt;
 
         struct {
-            const char *target_label;
-        } break_stmt;
+            ast_stmt_t *init;
+            ast_expr_t *condition;
+            ast_expr_t *post;
+            ast_stmt_t *body;
+        } loop;
 
         struct {
-            const char *target_label;
-        } continue_stmt;
+            ast_expr_t *condition;
+            ast_stmt_t *body;
 
-        struct {
-            struct for_init *init;
-            struct expr *condition;
-            struct expr *post;
-            struct stmt *body;
-            const char *break_label;
-            const char *continue_label;
-        } for_stmt;
-
-        struct {
-            struct expr *condition;
-            struct stmt *body;
-            const char *break_label;
-            const char *continue_label;
-        } while_stmt;
-
-        struct {
-            struct stmt *body;
-            struct expr *condition;
-            const char *break_label;
-            const char *continue_label;
-        } dowhile_stmt;
-
-        struct {
-            struct stmt *body;
-            struct expr *condition;
-            const char *break_label;
-            struct switch_annotation *annotation;
+            /* Sema filled */
+            ast_stmt_t *cases;
+            ast_stmt_t *default_case;
         } switch_stmt;
 
         struct {
-            struct expr *value;
-            struct block_item *items;
-            const char *label;
+            ast_expr_t *expr;
+            ast_stmt_t *stmt;
+
+            /* Sema filled */
+            int64_t value;
+            ast_stmt_t *next_case;
         } case_stmt;
 
         struct {
-            struct block_item *items;
-            const char *label;
+            ast_stmt_t *stmt;
         } default_stmt;
 
         struct {
-            struct expr *expr;
+            /* Sema filled */
+            ast_stmt_t *target;
+        } break_stmt;
+
+        struct {
+            /* Sema filled */
+            ast_stmt_t *target;
+        } continue_stmt;
+
+        struct {
+            ast_expr_t *expr;
         } return_stmt;
 
         struct {
-            struct block_item *items;
+            LIST(ast_decl_t) decls;
+        } decl;
+
+        struct {
+            LIST(ast_stmt_t) items;
         } block;
     };
 };
 
-/* Translation Unit */
+/*
+ * Translation unit
+ */
 
-struct ast_program {
-    struct decl *decls;
+struct ast_program_t {
+    LIST(ast_decl_t) decls;
 };
 
-static inline struct expr *expr_new(enum expr_kind kind, struct token tok)
-{
-    struct expr *e = calloc(1, sizeof(struct expr));
-    e->kind = kind;
-    e->tok = tok;
-    return e;
-}
-
-static inline struct stmt *stmt_new(enum stmt_kind kind, struct token tok)
-{
-    struct stmt *s = calloc(1, sizeof(struct stmt));
-    s->kind = kind;
-    s->tok = tok;
-    return s;
-}
-
-static inline struct decl *decl_new(enum decl_kind kind, struct token tok)
-{
-    struct decl *d = calloc(1, sizeof(struct decl));
-    d->kind = kind;
-    d->name = tok;
-    d->storage_class = SC_NONE;
-    d->storage_duration = SD_NONE;
-    d->linkage = LINK_NONE;
-    return d;
-}
-
-static inline struct block_item *block_item_new(enum block_item_kind kind, struct token tok)
-{
-    struct block_item *i = calloc(1, sizeof(struct block_item));
-    i->kind = kind;
-    i->tok = tok;
-    return i;
-}
-
-void ast_print(struct ast_program *program);
+ast_program_t *ast_program_new(void);
+ast_expr_t *ast_expr_new(expr_kind kind, token_t tok);
+ast_stmt_t *ast_stmt_new(stmt_kind kind, token_t tok);
+ast_decl_t *ast_decl_new(decl_kind kind, token_t tok);
 
 #endif

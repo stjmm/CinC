@@ -1,15 +1,8 @@
-/*
- * On demand lexer for C subset.
- * lexer_token_next() returns one at a time token.
- */
-
 #ifndef CINC_LEXER_H
 #define CINC_LEXER_H
 
-#include <stdint.h>
 #include <stddef.h>
 
-// X-Macro for all token types
 #define TOKEN_LIST \
     /* Single character tokens */ \
     X(TOKEN_LEFT_PAREN)           \
@@ -84,24 +77,25 @@
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  
 
-enum token_type {
-#define X(tok_name) tok_name,
+typedef enum {
+#define X(token_kind) token_kind,
     TOKEN_LIST
 #undef X
-};
+} token_kind;
 
-struct token {
-    enum token_type type;
-    const char *start;      // Pointer to original source string
-    int length;
+typedef struct {
+    token_kind kind;
+
+    const char *start;
+    size_t len;
 
     const char *filename;
-    int line;
-    const char *line_start; // Line start for current token 
-};
+    size_t line;
+    const char *line_start;
+} token_t;
 
-void lexer_init(const char *source);
-struct token lexer_next_token(void);
-char *token_to_cstr(struct token tok);
+void lexer_init(const char *source, const char *filename);
+token_t lexer_peek_token(void);
+token_t lexer_next_token(void);
 
 #endif

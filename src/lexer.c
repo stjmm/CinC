@@ -1,317 +1,369 @@
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-
 #include "lexer.h"
 
-struct lexer {
+#include <string.h>
+
+typedef struct {
     const char *start;
     const char *current;
     const char *line_start;
-    int line;
+    size_t line;
+    const char *filename;
+} lexer_t;
+
+typedef struct {
+    const char *name;
+    size_t len;
+    token_kind type;
+} keyword_t;
+
+static const keyword_t KEYWORDS[] = {
+    {"auto",     4, TOKEN_AUTO},
+    {"break",    5, TOKEN_BREAK},
+    {"case",     4, TOKEN_CASE},
+    {"continue", 8, TOKEN_CONTINUE},
+    {"default",  7, TOKEN_DEFAULT},
+    {"do",       2, TOKEN_DO},
+    {"else",     4, TOKEN_ELSE},
+    {"extern",   6, TOKEN_EXTERN},
+    {"for",      3, TOKEN_FOR},
+    {"goto",     4, TOKEN_GOTO},
+    {"if",       2, TOKEN_IF},
+    {"int",      3, TOKEN_INT},
+    {"long",     4, TOKEN_LONG},
+    {"register", 8, TOKEN_REGISTER},
+    {"return",   6, TOKEN_RETURN},
+    {"static",   6, TOKEN_STATIC},
+    {"switch",   6, TOKEN_SWITCH},
+    {"void",     4, TOKEN_VOID},
+    {"while",    5, TOKEN_WHILE},
 };
 
-static struct lexer lexer_state;
+static lexer_t lexer;
 
-extern const char *current_filename;
-
-void lexer_init(const char *source)
+static bool
+is_at_end(void)
 {
-    lexer_state.start = source;
-    lexer_state.current = source;
-    lexer_state.line_start = source;
-    lexer_state.line = 1;
+    return *lexer.current == '\0';
 }
 
-static bool is_at_end(void)
+static char
+advance(void)
 {
-    return *lexer_state.current == '\0';
+    lexer.current++;
+    return lexer.current[-1];
 }
 
-static char advance(void)
+static char
+peek(void)
 {
-    lexer_state.current++;
-    return lexer_state.current[-1];
+    return *lexer.current;
 }
 
-static char peek(void)
+static char
+peek_next(void)
 {
-    return *lexer_state.current;
+    return is_at_end() ? '\0' : lexer.current[1];
 }
 
-static char peek_next(void)
-{
-    if (is_at_end()) return '\0';
-    return lexer_state.current[1];
-}
-
-static bool match(char expected)
+static bool
+match(const char expected)
 {
     if (is_at_end())
         return false;
 
-    if (*lexer_state.current != expected)
+    if (*lexer.current != expected)
         return false;
 
-    lexer_state.current++;
+    lexer.current++;
     return true;
 }
 
-static bool is_alpha(char c)
+static bool
+is_alpha(const char c)
 {
-    if ((c >= 'a' && c <= 'z') ||
-        (c >= 'A' && c <= 'Z') ||
-         c == '_') return true;
-
-    return false;
+    return ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c == '_'));
 }
 
-static bool is_digit(char c)
+static bool
+is_digit(const char c)
 {
-    if (c >= '0' && c <= '9')
-        return true;
-    return false;
+    return (c >= '0' && c <= '9');
 }
 
-static struct token make_token(enum token_type type)
+static token_t
+make_token(token_kind kind)
 {
-    struct token tok;
-    tok.start = lexer_state.start;
-    tok.length = lexer_state.current - lexer_state.start;
-    tok.type = type;
-    tok.line = lexer_state.line;
-    tok.line_start = lexer_state.line_start;
-    tok.filename = current_filename;
-    return tok;
+    return (token_t){
+        .kind = kind,
+        .start = lexer.start,
+        .len = (lexer.current - lexer.start),
+        .filename = lexer.filename,
+        .line = lexer.line,
+        .line_start = lexer.line_start
+    };
 }
 
-/*
- * Skips block comments
- * Returns next token after block comment
- */
-static struct token skip_block_comment(void)
+static bool
+skip_block_comments(void)
 {
+    // '/*' already consumed
     while (!is_at_end()) {
         if (peek() == '*' && peek_next() == '/') {
             advance();
             advance();
-            return lexer_next_token();
-        }
-        if (peek() == '\n') {
-            lexer_state.line++;
+            return true;
+        } else if (peek() == '\n') {
             advance();
-            lexer_state.line_start = lexer_state.current;
-        } else {
-            advance();
+            lexer.line++;
+            lexer.line_start = lexer.current;
+            continue;
         }
+
+        advance();
     }
 
-    return make_token(TOKEN_ERROR);
+    return false;
 }
 
-static void skip_whitespace(void)
+static bool
+skip_whitespace(void)
 {
     for (;;) {
-        switch (peek()) {
-            case ' ':
-            case '\r':
-            case '\t':
-            case '\v':
-            case '\f':
+        switch(peek()) {
+        case ' ':
+        case '\r':
+        case '\t':
+        case '\v':
+        case '\f':
+            advance();
+            break;
+        case '\n':
+            advance();
+            lexer.line++;
+            lexer.line_start = lexer.current;
+            break;
+        case '/':
+            if (peek_next() == '/') {
                 advance();
-                break;
-            case '\n':
                 advance();
-                lexer_state.line++;
-                lexer_state.line_start = lexer_state.current;
+
+                while (!is_at_end() && peek() != '\n')
+                    advance();
+
                 break;
-            case '/':
-                if (peek_next() == '/')
-                    while (peek() != '\n' && !is_at_end())
-                        advance();
-                else
-                    return;
+            }
+
+            if (peek_next() == '*') {
+                advance();
+                advance();
+
+                if (!skip_block_comments())
+                    return false;
+                
                 break;
-            default:
-                return;
+            }
+            return true;
+        default:
+            return true;
         }
     }
 }
 
-static struct token number(void)
+static token_kind
+identifier_type(void)
+{
+    size_t keyword_len = lexer.current - lexer.start;
+
+    for (size_t i = 0; i < sizeof(KEYWORDS) / sizeof(keyword_t); i++) {
+        const keyword_t *keyword = &KEYWORDS[i];
+
+        if (keyword_len == keyword->len &&
+            memcmp(lexer.start, keyword->name, keyword_len) == 0) {
+            return keyword->type;
+        }
+    }
+
+    return TOKEN_IDENTIFIER;
+}
+
+static token_t
+identifier(void)
+{
+    while (is_alpha(peek()) || is_digit(peek()))
+        advance();
+
+    return make_token(identifier_type());
+}
+
+static token_t
+number(void)
 {
     while (is_digit(peek()))
         advance();
 
+    token_kind kind = TOKEN_INT_CONSTANT;
+
     if (peek() == 'l' || peek() == 'L') {
         advance();
-        return make_token(TOKEN_LONG_CONSTANT);
+        kind = TOKEN_LONG_CONSTANT;
     }
 
-    return make_token(TOKEN_INT_CONSTANT);
-}
+    // 123abc, 0lL, 1.5 (no floating constants yet)
+    if (is_alpha(peek()) || is_digit(peek()) || peek() == '.') {
+        while (is_alpha(peek()) || is_digit(peek()) || peek() == '.')
+            advance();
 
-static enum token_type check_keyword(unsigned int start, unsigned int length,
-        const char *rest, enum token_type type)
-{
-    if (lexer_state.current - lexer_state.start == start + length &&
-            memcmp(lexer_state.start + start, rest, length) == 0) {
-        return type;
+        return make_token(TOKEN_ERROR);
     }
-    return TOKEN_IDENTIFIER;
+
+    return make_token(kind);
 }
 
-// Trie based keyword recognition
-static enum token_type identifier_type(void)
+void
+lexer_init(const char *source, const char *filename)
 {
-    switch (lexer_state.start[0]) {
-        case 'a': return check_keyword(1, 3, "uto", TOKEN_AUTO);
-        case 'b': return check_keyword(1, 4, "reak", TOKEN_BREAK);
-        case 'c': 
-            if (lexer_state.current - lexer_state.start > 1)
-                switch (lexer_state.start[1]) {
-                    case 'a': return check_keyword(2, 2, "se", TOKEN_CASE);
-                    case 'o': return check_keyword(2, 6, "ntinue", TOKEN_CONTINUE);
-                }
-            break;
-        case 'd':
-            if (lexer_state.current - lexer_state.start > 1)
-                switch(lexer_state.start[1]) {
-                    case 'e': return check_keyword(2, 5, "fault", TOKEN_DEFAULT);
-                    case 'o': return check_keyword(2, 0, "", TOKEN_DO);
-                }
-            break;
-        case 'e':
-            if (lexer_state.current - lexer_state.start > 1)
-                switch(lexer_state.start[1]) {
-                    case 'l': return check_keyword(2, 2, "se", TOKEN_ELSE);
-                    case 'x': return check_keyword(2, 4, "tern", TOKEN_EXTERN);
-                }
-            break;
-        case 'f': return check_keyword(1, 2, "or", TOKEN_FOR);
-        case 'g': return check_keyword(1, 3, "oto", TOKEN_GOTO);
-        case 'i': 
-            if (lexer_state.current - lexer_state.start > 1)
-                switch (lexer_state.start[1]) {
-                    case 'f': return check_keyword(2, 0, "", TOKEN_IF);
-                    case 'n': return check_keyword(2, 1, "t", TOKEN_INT);
-                }
-            break;
-        case 'l': return check_keyword(1, 3, "ong", TOKEN_LONG);
-        case 's': 
-            if (lexer_state.current - lexer_state.start > 1)
-                switch (lexer_state.start[1]) {
-                    case 't': return check_keyword(2, 4, "atic", TOKEN_STATIC);
-                    case 'w': return check_keyword(2, 4, "itch", TOKEN_SWITCH);
-                }
-            break;
-        case 'r': 
-            if (lexer_state.current - lexer_state.start > 1)
-                switch (lexer_state.start[1]) {
-                    case 'e':
-                        if (lexer_state.current - lexer_state.start > 2)
-                            switch (lexer_state.start[2]) {
-                                case 't': return check_keyword(3, 3, "urn", TOKEN_RETURN);
-                                case 'g': return check_keyword(3, 5, "ister", TOKEN_REGISTER);
-                            }
-                }
-            break;
-        case 'w': return check_keyword(1, 4, "hile", TOKEN_WHILE);
-        case 'v': return check_keyword(1, 3, "oid", TOKEN_VOID);
+    lexer = (lexer_t){
+        .start = source,
+        .current = source,
+        .line_start = source,
+        .line = 1,
+        .filename = filename
+    };
+}
+
+token_t
+lexer_peek_token(void)
+{
+    lexer_t current = lexer;
+    token_t peek = lexer_next_token();
+    lexer = current;
+    return peek;
+}
+
+token_t
+lexer_next_token(void)
+{
+    if (!skip_whitespace()) {
+        lexer.start = lexer.current;
+        return make_token(TOKEN_ERROR);
     }
-    return TOKEN_IDENTIFIER;
-}
-
-static struct token identifier(void)
-{
-    while (is_alpha(peek()) || is_digit(peek()))
-        advance();
-    return make_token(identifier_type());
-}
-
-struct token lexer_next_token()
-{
-    skip_whitespace();
-    lexer_state.start = lexer_state.current;
+    lexer.start = lexer.current;
 
     if (is_at_end())
         return make_token(TOKEN_EOF);
 
-    char c = advance();
+    const char c = advance();
     if (is_digit(c))
         return number();
-    if (is_alpha(c))
+    else if (is_alpha(c))
         return identifier();
 
     switch (c) {
-        case '(': return make_token(TOKEN_LEFT_PAREN);
-        case ')': return make_token(TOKEN_RIGHT_PAREN);
-        case '{': return make_token(TOKEN_LEFT_BRACE);
-        case '}': return make_token(TOKEN_RIGHT_BRACE);
+        case '(':
+            return make_token(TOKEN_LEFT_PAREN);
+        case ')':
+            return make_token(TOKEN_RIGHT_PAREN);
+        case '{':
+            return make_token(TOKEN_LEFT_BRACE);
+        case '}':
+            return make_token(TOKEN_RIGHT_BRACE);
+        case '[':
+            return make_token(TOKEN_LEFT_BRACKET);
+        case ']':
+            return make_token(TOKEN_RIGHT_BRACKET);
         case '+':
-            if (match('+')) return make_token(TOKEN_PLUS_PLUS);
-            else if (match('=')) return make_token(TOKEN_PLUS_EQUAL);
-            else return make_token(TOKEN_PLUS);
+            if (match('+'))
+                return make_token(TOKEN_PLUS_PLUS);
+            else if (match('='))
+                return make_token(TOKEN_PLUS_EQUAL);
+            else
+                return make_token(TOKEN_PLUS);
         case '-':
-            if (match('-')) return make_token(TOKEN_MINUS_MINUS);
-            else if (match('=')) return make_token(TOKEN_MINUS_EQUAL);
-            else return make_token(TOKEN_MINUS);
+            if (match('-'))
+                return make_token(TOKEN_MINUS_MINUS);
+            else if (match('='))
+                return make_token(TOKEN_MINUS_EQUAL);
+            else
+                return make_token(TOKEN_MINUS);
         case '*':
-            if (match('=')) return make_token(TOKEN_STAR_EQUAL);
-            else return make_token(TOKEN_STAR);
+            if (match('='))
+                return make_token(TOKEN_STAR_EQUAL);
+            else 
+                return make_token(TOKEN_STAR);
         case '/': 
-            if (match('=')) return make_token(TOKEN_SLASH_EQUAL);
-            else if (match('*')) return skip_block_comment();
-            else return make_token(TOKEN_SLASH);
+            if (match('='))
+                return make_token(TOKEN_SLASH_EQUAL);
+            else
+                return make_token(TOKEN_SLASH);
         case '%': 
-            if (match('=')) return make_token(TOKEN_PERCENT_EQUAL);
-            else return make_token(TOKEN_PERCENT);
+            if (match('='))
+                return make_token(TOKEN_PERCENT_EQUAL);
+            else
+                return make_token(TOKEN_PERCENT);
         case '~':
             return make_token(TOKEN_TILDE);
         case '=':
-            if (match('=')) return make_token(TOKEN_EQUAL_EQUAL);
-            else return make_token(TOKEN_EQUAL);
+            if (match('='))
+                return make_token(TOKEN_EQUAL_EQUAL);
+            else
+                return make_token(TOKEN_EQUAL);
         case '!':
-            if (match('=')) return make_token(TOKEN_BANG_EQUAL);
-            else return make_token(TOKEN_BANG);
+            if (match('='))
+                return make_token(TOKEN_BANG_EQUAL);
+            else
+                return make_token(TOKEN_BANG);
         case '&':
-            if (match('&')) return make_token(TOKEN_AND_AND);
-            else if (match('=')) return make_token(TOKEN_AND_EQUAL);
-            else return make_token(TOKEN_AND);
+            if (match('&'))
+                return make_token(TOKEN_AND_AND);
+            else if (match('='))
+                return make_token(TOKEN_AND_EQUAL);
+            else
+                return make_token(TOKEN_AND);
         case '|':
-            if (match('|')) return make_token(TOKEN_OR_OR);
-            else if (match('=')) return make_token(TOKEN_OR_EQUAL);
-            else return make_token(TOKEN_OR);
+            if (match('|'))
+                return make_token(TOKEN_OR_OR);
+            else if (match('='))
+                return make_token(TOKEN_OR_EQUAL);
+            else
+                return make_token(TOKEN_OR);
         case '^':
-            if (match('=')) return make_token(TOKEN_CARET_EQUAL);
-            else return make_token(TOKEN_CARET);
+            if (match('='))
+                return make_token(TOKEN_CARET_EQUAL);
+            else
+                return make_token(TOKEN_CARET);
         case '<':
-            if (match('=')) return make_token(TOKEN_LESS_EQUAL);
+            if (match('='))
+                return make_token(TOKEN_LESS_EQUAL);
             else if (match('<')) {
-                if (match('=')) return make_token(TOKEN_LESS_LESS_EQUAL);
-                else return make_token(TOKEN_LESS_LESS);
+                if (match('='))
+                    return make_token(TOKEN_LESS_LESS_EQUAL);
+                else
+                    return make_token(TOKEN_LESS_LESS);
             }
-            else return make_token(TOKEN_LESS);
+            else
+                return make_token(TOKEN_LESS);
         case '>':
-            if (match('=')) return make_token(TOKEN_GREATER_EQUAL);
+            if (match('='))
+                return make_token(TOKEN_GREATER_EQUAL);
             else if (match('>')) {
-                if (match('=')) return make_token(TOKEN_GREATER_GREATER_EQUAL);
-                return make_token(TOKEN_GREATER_GREATER);
+                if (match('='))
+                    return make_token(TOKEN_GREATER_GREATER_EQUAL);
+                return
+                    make_token(TOKEN_GREATER_GREATER);
             }
-            else return make_token(TOKEN_GREATER);
-        case ';': return make_token(TOKEN_SEMICOLON);
-        case ':': return make_token(TOKEN_COLON);
-        case '?': return make_token(TOKEN_QUESTION_MARK);
-        case ',': return make_token(TOKEN_COMMA);
+            else
+                return make_token(TOKEN_GREATER);
+        case ';':
+            return make_token(TOKEN_SEMICOLON);
+        case ':':
+            return make_token(TOKEN_COLON);
+        case '?':
+            return make_token(TOKEN_QUESTION_MARK);
+        case ',':
+            return make_token(TOKEN_COMMA);
     }
 
     return make_token(TOKEN_ERROR);
-}
-
-char *token_to_cstr(struct token tok)
-{
-    char *buf = malloc(tok.length + 1);
-    memcpy(buf, tok.start, tok.length);
-    buf[tok.length] = '\0';
-    return buf;
 }

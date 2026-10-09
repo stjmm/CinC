@@ -1,189 +1,203 @@
 #ifndef CINC_X86_H
 #define CINC_X86_H
 
-#include <stdio.h>
-
 #include "ir.h"
+#include "sema.h"
 
-/* ASM Operands */
+#include <stdio.h>
+#include <stdint.h>
 
-// Size agnostic registers
-enum reg {
-    REG_AX,
-    REG_CX,
-    REG_DX,
-    REG_DI,
-    REG_SI,
-    REG_R8,
-    REG_R9,
-    REG_R10,
-    REG_R11,
-};
+#define ASM_REG_LIST                                           \
+    X(REG_AX,   "rax",   "eax",   "ax",    "al",    "ah")      \
+    X(REG_CX,   "rcx",   "ecx",   "cx",    "cl",    "ch")      \
+    X(REG_DX,   "rdx",   "edx",   "dx",    "dl",    "dh")      \
+    X(REG_DI,   "rdi",   "edi",   "di",    "dil",   "")        \
+    X(REG_SI,   "rsi",   "esi",   "si",    "sil",   "")        \
+    X(REG_R8,   "r8",    "r8d",   "r8w",   "r8b",   "")        \
+    X(REG_R9,   "r9",    "r9d",   "r9w",   "r9b",   "")        \
+    X(REG_R10,  "r10",   "r10d",  "r10w",  "r10b",  "")        \
+    X(REG_R11,  "r11",   "r11d",  "r11w",  "r11b",  "")        \
+    X(REG_SP,   "rsp",   "esp",   "sp",    "spl",   "")        \
+    X(REG_BP,   "rbp",   "ebp",   "bp",    "bpl",   "")        \
+    X(REG_BX,   "rbx",   "ebx",   "bx",    "bl",    "bh")      \
+    X(REG_R12,  "r12",   "r12d",  "r12w",  "r12b",  "")        \
+    X(REG_R13,  "r13",   "r13d",  "r13w",  "r13b",  "")        \
+    X(REG_R14,  "r14",   "r14d",  "r14w",  "r14b",  "")        \
+    X(REG_R15,  "r15",   "r15d",  "r15w",  "r15b",  "")
 
-enum operand_type {
+typedef enum {
+#define X(name, q, l, w, b, h) name,
+    ASM_REG_LIST
+#undef X
+} asm_reg;
+
+/* Condition codes, with the suffix used by jCC and setCC */
+#define ASM_COND_LIST   \
+    X(COND_E,  "e")     \
+    X(COND_NE, "ne")    \
+    X(COND_G,  "g")     \
+    X(COND_GE, "ge")    \
+    X(COND_L,  "l")     \
+    X(COND_LE, "le")
+
+typedef enum {
+#define X(name, suffix) name,
+    ASM_COND_LIST
+#undef X
+} asm_cond;
+
+/* Operators, with their name in string */
+#define ASM_UNARY_OP_LIST       \
+    X(ASM_UNARY_NEG, "neg")     \
+    X(ASM_UNARY_NOT, "not")
+
+#define ASM_BINARY_OP_LIST      \
+    X(ASM_BINARY_ADD,  "add")   \
+    X(ASM_BINARY_SUB,  "sub")   \
+    X(ASM_BINARY_IMUL, "imul")  \
+    X(ASM_BINARY_AND,  "and")   \
+    X(ASM_BINARY_OR,   "or")    \
+    X(ASM_BINARY_XOR,  "xor")   \
+    X(ASM_BINARY_SAL,  "sal")   \
+    X(ASM_BINARY_SAR,  "sar")
+
+typedef enum {
+#define X(name, name_str) name,
+    ASM_UNARY_OP_LIST
+#undef X
+} asm_unary_op;
+
+typedef enum {
+#define X(name, name_str) name,
+    ASM_BINARY_OP_LIST
+#undef X
+} asm_binary_op;
+
+typedef enum {
+    ASM_BYTE = 1,
+    ASM_WORD = 2,
+    ASM_LONGWORD = 4,
+    ASM_QUADWORD = 8
+} asm_size;
+
+typedef enum {
     OPERAND_IMM,
     OPERAND_REG,
     OPERAND_PSEUDO,
     OPERAND_STACK,
     OPERAND_DATA
-};
+} asm_operand_kind;
 
-struct operand {
-    enum operand_type type;
+typedef struct {
+    asm_operand_kind kind;
 
     union {
-        int imm;
-
-        enum reg reg;
-
-        int stack;      // Location on the stack (eg. -4(%rbp))
-
-        const char *data;
-
-        const char *pseudo;
+        int64_t imm;
+        asm_reg reg;
+        uint32_t pseudo; // IR pseudo id
+        int32_t stack;   // Offset from %rbp
+        symbol_t *data;  // Static-duration variables
     };
-};
+} asm_operand_t;
 
-/* ASM Instruction */
+typedef enum {
+    ASM_INSTR_MOV,
+    ASM_INSTR_MOVSX,
+    ASM_INSTR_UNARY,
+    ASM_INSTR_BINARY,
+    ASM_INSTR_CMP,
+    ASM_INSTR_IDIV,
+    ASM_INSTR_CDQ,
+    ASM_INSTR_JMP,
+    ASM_INSTR_JMPCC,
+    ASM_INSTR_SETCC,
+    ASM_INSTR_LABEL,
+    ASM_INSTR_PUSH,
+    ASM_INSTR_CALL,
+    ASM_INSTR_RET
+} asm_instr_kind;
 
-enum cond_code {
-    COND_E,
-    COND_NE,
-    COND_G,
-    COND_GE,
-    COND_L,
-    COND_LE,
-};
+typedef struct asm_instr_t asm_instr_t;
+struct asm_instr_t {
+    asm_instr_kind kind;
+    asm_instr_t *next;
 
-enum asm_op {
-    // Unary
-    ASM_NEG,
-    ASM_NOT,
-    // Binary
-    ASM_ADD,
-    ASM_SUB,
-    ASM_IMUL,
-    ASM_AND,
-    ASM_OR,
-    ASM_XOR,
-    ASM_SHL,
-    ASM_SHR,
-};
-
-enum asm_instr_type { 
-    ASM_MOV,
-    ASM_UNARY,
-    ASM_BINARY,
-    ASM_CMP,
-    ASM_IDIV,
-    ASM_CDQ,
-    ASM_JMP,
-    ASM_JMPCC,
-    ASM_SETCC,
-    ASM_LABEL,
-    ASM_ALLOCSTACK,
-    ASM_DEALLOCSTACK,
-    ASM_PUSH,
-    ASM_CALL,
-    ASM_RET,
-};
-
-struct asm_instr {
-    enum asm_instr_type type;
-    struct asm_instr *next;
+    /* Operand size. Unused by jumps, labels, call and ret */
+    asm_size size;
 
     union {
+        /* ASM_INSTR_MOV and ASM_INSTR_MOVSX */
         struct {
-            struct operand src;
-            struct operand dst;
+            asm_operand_t src;
+            asm_operand_t dst;
         } mov;
 
         struct {
-            enum asm_op op;
-            struct operand oper;
+            asm_unary_op op;
+            asm_operand_t dst;
         } unary;
 
         struct {
-            enum asm_op op;
-            struct operand src;
-            struct operand dst;
+            asm_binary_op op;
+            asm_operand_t src;
+            asm_operand_t dst;
         } binary;
 
+        /* Sets the flags for dst - src */
         struct {
-            struct operand lhs;
-            struct operand rhs;
+            asm_operand_t src;
+            asm_operand_t dst;
         } cmp;
 
         struct {
-            struct operand oper;
+            asm_operand_t divisor;
         } idiv;
 
         struct {
-            int identifier;
+            ir_label_t target;
         } jmp;
 
         struct {
-            enum cond_code code;
-            int identifier;
+            asm_cond cond;
+            ir_label_t target;
         } jmpcc;
 
         struct {
-            enum cond_code code;
-            struct operand oper;
+            asm_cond cond;
+            asm_operand_t dst;
         } setcc;
 
         struct {
-            int identifier;
+            ir_label_t label;
         } label;
 
         struct {
-            int val;
-        } allocate_stack;
-
-        struct {
-            int val;
-        } deallocate_stack;
-
-        struct {
-            struct operand oper;
+            asm_operand_t src;
         } push;
 
         struct {
-            const char *identifier;
+            symbol_t *callee;
         } call;
-
-        struct { } ret;
-        struct { } cdq;
     };
 };
 
-/* ASM Translation Unit */
+typedef struct asm_function_t asm_function_t;
+struct asm_function_t {
+    symbol_t *sym;
+    LIST(asm_instr_t) instrs;
+    int32_t stack_size;
 
-struct asm_static_variable {
-    const char *name;
-    bool global;
-    long init;
-
-    struct asm_static_variable *next;
+    asm_function_t *next;
 };
 
-struct asm_function {
-    const char *name;
-    bool global;
+typedef struct {
+    LIST(asm_function_t) fns;
+    const sema_result_t *sema;
+} asm_program_t;
 
-    struct asm_function *next;
-
-    struct asm_instr *first;
-    struct asm_instr *last;
-
-    int stack_size;
-};
-
-struct asm_program {
-    struct asm_function *functions;
-    struct asm_static_variable *static_vars;
-};
-
-void emit_x86(struct ir_program *ir, FILE *file);
+bool asm_emit(
+        ir_program_t *ir_program,
+        sema_result_t *sema,
+        FILE *out);
 
 #endif

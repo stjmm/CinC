@@ -4,7 +4,7 @@ A small C(11) compiler written in C.
 
 ## Features
 
-- `int` and `void` types
+- `int`, `long` and `void` types
 - Statements
     - if/else
     - for/while/dowhile

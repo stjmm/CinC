@@ -1,514 +1,469 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-
 #include "ir.h"
 #include "ast.h"
-#include "sema.h"
+#include "base/vector.h"
+#include "lexer.h"
 #include "type.h"
-#include "base/hash_map.h"
+#include "base/list.h"
+#include "base/memory.h"
 
-static struct ir_function *current_function;
-extern struct symbol *all_symbols; // From sema (for now simple) TODO: Change this
+typedef struct {
+    ir_program_t *program;
+    ir_function_t *fn;
+    uint32_t next_pseudo_id;
+    uint32_t next_label_id;
+} ir_builder_t;
 
-/*
- * One per function.
- * Maps label string to label int.
- */
-static hash_map label_ids;
+static ir_builder_t ir;
 
-static int next_temp_id;
-static int next_label_id;
-
-static struct ir_value ir_constant(long c) 
+static ir_value_t
+value_none(void)
 {
-    return (struct ir_value) {
+    return (ir_value_t){ .kind = IR_VALUE_NONE };
+}
+
+static ir_value_t
+value_constant(int64_t value, type_t *ty)
+{
+    return (ir_value_t){
         .kind = IR_VALUE_CONSTANT,
-        .constant = c
+        .ty = ty,
+        .constant = value
     };
 }
 
-static struct ir_value ir_pseudo(const char *name)
+static ir_value_t
+value_temp(type_t *ty)
 {
-    return (struct ir_value) {
+    return (ir_value_t){
         .kind = IR_VALUE_PSEUDO,
-        .name = name
+        .ty = ty,
+        .pseudo = ir.next_pseudo_id++
     };
 }
 
-static struct ir_value ir_static(const char *name)
+static ir_value_t
+value_object(type_t *ty, symbol_t *sym)
 {
-    return (struct ir_value) {
-        .kind = IR_VALUE_STATIC,
-        .name = name
+    if (sym->sd == STORAGE_DURATION_STATIC) {
+        return (ir_value_t){
+            .kind = IR_VALUE_STATIC,
+            .ty = ty,
+            .sym = sym
+        };
+    } else {
+        return (ir_value_t){
+            .kind = IR_VALUE_PSEUDO,
+            .ty = ty,
+            .pseudo = (uint32_t)sym->id
+        };
+    }
+}
+
+static ir_label_t
+make_label(ir_label_kind kind, uint32_t id)
+{
+    return (ir_label_t){
+        .kind = kind,
+        .id = id
     };
 }
 
-static struct ir_value emit_object_value(struct symbol *sym)
+static ir_label_t
+temp_label(void)
 {
-    if (sym->storage_duration == SD_STATIC)
-        return ir_static(sym->ir_name);
-
-    return ir_pseudo(sym->ir_name);
+    return make_label(IR_LABEL_TEMP, ir.next_label_id++);
 }
 
-static struct ir_value make_temp(void)
+static ir_unary_op
+convert_unary_op(token_kind kind)
 {
-    int len = snprintf(NULL, 0, "tmp.%d", next_temp_id);
-    char *buf = malloc(len + 1);
-
-    snprintf(buf, len + 1, "tmp.%d", next_temp_id++);
-
-    return ir_pseudo(buf);
-}
-
-static int make_label(void)
-{
-    return next_label_id++;
-}
-
-static int get_or_create_label_id(const char *name, int len)
-{
-    void *value = hashmap_get(&label_ids, name, len);
-    if (value)
-        return (int)(intptr_t)value;
-
-    int id = make_label();
-    hashmap_set(&label_ids, name, len, (void *)(intptr_t)id);
-
-    return id;
-}
-
-static int get_or_create_label_id_tok(struct token *tok)
-{
-    return get_or_create_label_id(tok->start, tok->length);
-}
-
-static int get_or_create_label_id_cstr(const char *str)
-{
-    return get_or_create_label_id(str, strlen(str));
-}
-
-static enum ir_unary_op convert_unary_op(struct token tok)
-{
-    switch (tok.type) {
+    switch (kind) {
         case TOKEN_MINUS:
-            return IR_UNOP_NEG;
+            return IR_UNARY_NEG;
         case TOKEN_TILDE:
-            return IR_UNOP_BIT_NOT;
+            return IR_UNARY_BIT_NOT;
         case TOKEN_BANG:
-            return IR_UNOP_LOG_NOT;
+            return IR_UNARY_LOG_NOT;
         default:
-            break;
+            (void)0;
     }
 }
 
-static enum ir_binary_op convert_binary_op(struct token tok)
+static ir_binary_op
+convert_binary_op(token_kind kind)
 {
-    switch (tok.type) {
-        case TOKEN_PLUS:            return IR_BINOP_ADD;
-        case TOKEN_MINUS:           return IR_BINOP_SUB;
-        case TOKEN_STAR:            return IR_BINOP_MUL;
-        case TOKEN_SLASH:           return IR_BINOP_DIV;
-        case TOKEN_PERCENT:         return IR_BINOP_REM;
-        case TOKEN_AND:             return IR_BINOP_BIT_AND;
-        case TOKEN_OR:              return IR_BINOP_BIT_OR;
-        case TOKEN_CARET:           return IR_BINOP_BIT_XOR;
-        case TOKEN_EQUAL_EQUAL:     return IR_BINOP_EQ;
-        case TOKEN_BANG_EQUAL:      return IR_BINOP_NE;
-        case TOKEN_LESS:            return IR_BINOP_LT;
-        case TOKEN_LESS_EQUAL:      return IR_BINOP_LE;
-        case TOKEN_GREATER:         return IR_BINOP_GT;
-        case TOKEN_GREATER_EQUAL:   return IR_BINOP_GE;
-        case TOKEN_GREATER_GREATER: return IR_BINOP_SHR;
-        case TOKEN_LESS_LESS:       return IR_BINOP_SHL;
-
-        // Compound assignments
-        case TOKEN_PLUS_EQUAL:     return IR_BINOP_ADD;
-        case TOKEN_MINUS_EQUAL:    return IR_BINOP_SUB;
-        case TOKEN_STAR_EQUAL:     return IR_BINOP_MUL;
-        case TOKEN_SLASH_EQUAL:    return IR_BINOP_DIV;
-        case TOKEN_PERCENT_EQUAL:  return IR_BINOP_REM;
-        case TOKEN_AND_EQUAL:      return IR_BINOP_BIT_AND;
-        case TOKEN_OR_EQUAL:       return IR_BINOP_BIT_OR;
-        case TOKEN_CARET_EQUAL:    return IR_BINOP_BIT_XOR;
-        case TOKEN_LESS_LESS_EQUAL:return IR_BINOP_SHL;
-        case TOKEN_GREATER_GREATER_EQUAL:return IR_BINOP_SHR;
-        default: break;
+    switch (kind) {
+        case TOKEN_PLUS:
+        case TOKEN_PLUS_EQUAL:
+            return IR_BINARY_ADD;
+        case TOKEN_MINUS:
+        case TOKEN_MINUS_EQUAL:
+            return IR_BINARY_SUB;
+        case TOKEN_STAR:
+        case TOKEN_STAR_EQUAL:
+            return IR_BINARY_MUL;
+        case TOKEN_SLASH:
+        case TOKEN_SLASH_EQUAL:
+            return IR_BINARY_DIV;
+        case TOKEN_PERCENT:
+        case TOKEN_PERCENT_EQUAL:
+            return IR_BINARY_REM;
+        case TOKEN_AND:
+        case TOKEN_AND_EQUAL:
+            return IR_BINARY_BIT_AND;
+        case TOKEN_OR:
+        case TOKEN_OR_EQUAL:
+            return IR_BINARY_BIT_OR;
+        case TOKEN_CARET:
+        case TOKEN_CARET_EQUAL:
+            return IR_BINARY_BIT_XOR;
+        case TOKEN_LESS_LESS:
+        case TOKEN_LESS_LESS_EQUAL:
+            return IR_BINARY_SHL;
+        case TOKEN_GREATER_GREATER:
+        case TOKEN_GREATER_GREATER_EQUAL:
+            return IR_BINARY_SHR;
+        case TOKEN_EQUAL_EQUAL:
+            return IR_BINARY_EQ;
+        case TOKEN_BANG_EQUAL:
+            return IR_BINARY_NE;
+        case TOKEN_LESS:
+            return IR_BINARY_LT;
+        case TOKEN_LESS_EQUAL:
+            return IR_BINARY_LE;
+        case TOKEN_GREATER:
+            return IR_BINARY_GT;
+        case TOKEN_GREATER_EQUAL:
+            return IR_BINARY_GE;
+        default:
+            (void)0;
     }
 }
 
-static void append_instr(struct ir_instr *instr)
+static ir_instr_t *
+instr_new(ir_instr_kind kind)
 {
-    if (!current_function->first)
-        current_function->first = instr;
-    else
-        current_function->last->next = instr;
-    current_function->last = instr;
-}
-
-static void append_function(struct ir_program *program, struct ir_function *fn)
-{
-    struct ir_function **tail = &program->functions;
-
-    while (*tail)
-        tail = &(*tail)->next;
-
-    *tail = fn;
-}
-
-static void append_static_variable(struct ir_program *program,
-                                struct ir_static_variable *var)
-{
-    struct ir_static_variable **tail = &program->static_vars;
-
-    while (*tail)
-        tail = &(*tail)->next;
-
-    *tail = var;
-}
-
-static void append_param(struct ir_function *fn, struct ir_param *param)
-{
-    struct ir_param **tail = &fn->params;
-
-    while (*tail)
-        tail = &(*tail)->next;
-
-    *tail = param;
-}
-
-static struct ir_instr *new_instr(enum ir_instr_kind kind)
-{
-    struct ir_instr *instr = calloc(1, sizeof(struct ir_instr));
+    ir_instr_t *instr = xcalloc(1, sizeof(ir_instr_t));
     instr->kind = kind;
 
+    LIST_APPEND(&ir.fn->instrs, instr);
     return instr;
 }
 
-static void emit_return_value(struct ir_value value)
+static void
+emit_return(ir_value_t src)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_RETURN);
-    instr->ret.has_value = true;
-    instr->ret.src = value;
-
-    append_instr(instr);
+    ir_instr_t *instr = instr_new(IR_INSTR_RETURN);
+    instr->ret.src = src;
 }
 
-static void emit_return_void(void)
+static void
+emit_unary(ir_unary_op op, ir_value_t src, ir_value_t dst)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_RETURN);
-    instr->ret.has_value = false;
-
-    append_instr(instr);
-}
-
-static void emit_unary(enum ir_unary_op op,
-                        struct ir_value src,
-                        struct ir_value dst)
-{
-    struct ir_instr *instr = new_instr(IR_INSTR_UNARY);
+    ir_instr_t *instr = instr_new(IR_INSTR_UNARY);
     instr->unary.op = op;
     instr->unary.src = src;
     instr->unary.dst = dst;
-
-    append_instr(instr);
 }
 
-static void emit_binary(enum ir_binary_op op,
-                        struct ir_value lhs,
-                        struct ir_value rhs,
-                        struct ir_value dst)
+static void
+emit_binary(
+        ir_binary_op op,
+        ir_value_t lhs,
+        ir_value_t rhs,
+        ir_value_t dst)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_BINARY);
+    ir_instr_t *instr = instr_new(IR_INSTR_BINARY);
     instr->binary.op = op;
     instr->binary.lhs = lhs;
     instr->binary.rhs = rhs;
     instr->binary.dst = dst;
-
-    append_instr(instr);
 }
 
-static void emit_copy(struct ir_value src, struct ir_value dst)
+static void
+emit_copy(ir_value_t src, ir_value_t dst)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_COPY);
+    ir_instr_t *instr = instr_new(IR_INSTR_COPY);
     instr->copy.src = src;
     instr->copy.dst = dst;
-
-    append_instr(instr);
 }
 
-static void emit_jump(int label_id)
+static void
+emit_jump(ir_label_t target)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_JUMP);
-    instr->jump.label_id = label_id;
-
-    append_instr(instr);
+    ir_instr_t *instr = instr_new(IR_INSTR_JUMP);
+    instr->jump.target = target;
 }
 
-static void emit_jump_if_zero(struct ir_value cond, int label_id)
+static void
+emit_jump_if_zero(ir_value_t cond, ir_label_t target)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_JUMP_IF_ZERO);
-    instr->jump_if_zero.cond = cond;
-    instr->jump_if_zero.label_id = label_id;
-
-    append_instr(instr);
+    ir_instr_t *instr = instr_new(IR_INSTR_JUMP_IF_ZERO);
+    instr->jump_cond.cond = cond;
+    instr->jump_cond.target = target;
 }
 
-static void emit_jump_if_not_zero(struct ir_value cond, int label_id)
+static void
+emit_jump_if_not_zero(ir_value_t cond, ir_label_t target)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_JUMP_IF_NOT_ZERO);
-    instr->jump_if_not_zero.cond = cond;
-    instr->jump_if_not_zero.label_id = label_id;
-
-    append_instr(instr);
+    ir_instr_t *instr = instr_new(IR_INSTR_JUMP_IF_NOT_ZERO);
+    instr->jump_cond.cond = cond;
+    instr->jump_cond.target = target;
 }
 
-static void emit_label(int label_id)
+static void
+emit_label(ir_label_t label)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_LABEL);
-    instr->label.label_id = label_id;
-
-    append_instr(instr);
+    ir_instr_t *instr = instr_new(IR_INSTR_LABEL);
+    instr->label.label = label;
 }
 
-static void emit_call(const char *calle, struct ir_value *args, int arg_count,
-                        bool has_dst, struct ir_value dst)
+static void
+emit_call(symbol_t *callee, vector args, ir_value_t dst)
 {
-    struct ir_instr *instr = new_instr(IR_INSTR_CALL);
-    instr->call.calle = calle;
+    ir_instr_t *instr = instr_new(IR_INSTR_CALL);
+    instr->call.callee = callee;
     instr->call.args = args;
-    instr->call.arg_count = arg_count;
-    instr->call.has_dst = has_dst;
     instr->call.dst = dst;
-
-    append_instr(instr);
 }
 
-static struct ir_value emit_expr(struct expr *expr);
-static void emit_stmt(struct stmt *stmt);
-static void emit_decl_list(struct decl *decls);
-static void emit_block_item(struct block_item *item);
+static void
+emit_cast(ir_value_t src, ir_value_t dst)
+{
+    ir_instr_t *instr = instr_new(IR_INSTR_CAST);
+    instr->cast.src = src;
+    instr->cast.dst = dst;
+}
 
-static struct ir_value emit_expr(struct expr *expr)
+/* Returns value converted to ty, emitting cast only when needed */
+static ir_value_t
+emit_convert(ir_value_t value, type_t *ty)
+{
+    if (type_compatible(value.ty, ty))
+        return value;
+
+    // Constant converted here instead of runtime
+    if (value.kind == IR_VALUE_CONSTANT) {
+        int64_t converted = type_is_int(ty)
+            ? (int32_t)value.constant
+            : value.constant;
+
+        return value_constant(converted, ty);
+    }
+
+    ir_value_t dst = value_temp(ty);
+    emit_cast(value, dst);
+    return dst;
+}
+
+static ir_value_t
+emit_expr(ast_expr_t *expr)
 {
     switch (expr->kind) {
         case EXPR_INT_CONSTANT:
-            return ir_constant(expr->constant_value);
-
         case EXPR_LONG_CONSTANT:
-            return ir_constant(expr->constant_value);
-
+            return value_constant(expr->constant_value, expr->ty);
         case EXPR_IDENTIFIER:
-            return emit_object_value(expr->identifier.sym);
+            return value_object(expr->ty, expr->identifier.sym);
+        case EXPR_UNARY:
+            ir_value_t src = emit_expr(expr->unary.operand);
 
-        case EXPR_UNARY: {
-            struct ir_value src = emit_expr(expr->unary.operand);
-
-            // Unary plus doesn't do anything
-            if (expr->tok.type == TOKEN_PLUS)
+            if (expr->unary.op.kind == TOKEN_PLUS)
                 return src;
-            
-            struct ir_value dst = make_temp();
 
-            emit_unary(convert_unary_op(expr->tok), src, dst);
+            ir_value_t dst = value_temp(expr->ty);
+            emit_unary(convert_unary_op(expr->unary.op.kind), src, dst);
             return dst;
-        }
-
         case EXPR_BINARY: {
-            // Special cases for && and || (short-circut)
-           if (expr->tok.type == TOKEN_AND_AND) {
-                // a && b ->
-                //  v1 = emit_expr(a); if a == 0 jump false
-                //  v2 = emit_expr(b); if b == 0 jump false
-                //  dst = 1; jump end
-                //  false: dst = 0
-                //  end:
-                int false_label = make_label();
-                int end_label = make_label();
-                struct ir_value dst = make_temp();
+            token_kind op = expr->binary.op.kind;
 
-                struct ir_value lhs = emit_expr(expr->binary.left);
+            if (op == TOKEN_AND_AND) {
+                // a && b:
+                //  if a == 0 jump false
+                //  if b == 0 jump false
+                //  dst = 1; jump end
+                // false:
+                //  dst = 0
+                // end
+                ir_label_t false_label = temp_label();
+                ir_label_t end_label = temp_label();
+                ir_value_t dst = value_temp(expr->ty);
+
+                ir_value_t lhs = emit_expr(expr->binary.left);
                 emit_jump_if_zero(lhs, false_label);
 
-                struct ir_value rhs = emit_expr(expr->binary.right);
+                ir_value_t rhs = emit_expr(expr->binary.right);
                 emit_jump_if_zero(rhs, false_label);
 
-                emit_copy(ir_constant(1), dst);
+                emit_copy(value_constant(1, type_int()), dst);
                 emit_jump(end_label);
 
                 emit_label(false_label);
-                emit_copy(ir_constant(0), dst);
+                emit_copy(value_constant(0, type_int()), dst);
 
                 emit_label(end_label);
                 return dst;
             }
 
-            if (expr->tok.type == TOKEN_OR_OR) {
-                // a || b ->
-                //  v1 = emit_expr(a); if a != 0 jump true
-                //  v2 = emit_expr(b); if b != 0 jump true
+            if (op == TOKEN_OR_OR) {
+                // a || b:
+                //  if a != 0 jump true
+                //  if b != 0 jump true
                 //  dst = 0; jump end
-                //  true: dst = 1
-                //  end:
-                int true_label = make_label();
-                int end_label = make_label();
-                struct ir_value dst = make_temp();
+                // true:
+                //  dst = 1
+                // end
+                ir_label_t true_label = temp_label();
+                ir_label_t end_label = temp_label();
+                ir_value_t dst = value_temp(expr->ty);
 
-                struct ir_value lhs = emit_expr(expr->binary.left);
+                ir_value_t lhs = emit_expr(expr->binary.left);
                 emit_jump_if_not_zero(lhs, true_label);
 
-                struct ir_value rhs = emit_expr(expr->binary.right);
+                ir_value_t rhs = emit_expr(expr->binary.right);
                 emit_jump_if_not_zero(rhs, true_label);
 
-                emit_copy(ir_constant(0), dst);
+                emit_copy(value_constant(0, expr->ty), dst);
                 emit_jump(end_label);
 
                 emit_label(true_label);
-                emit_copy(ir_constant(1), dst);
+                emit_copy(value_constant(1, expr->ty), dst);
 
                 emit_label(end_label);
                 return dst;
             }
 
-            // Standard case for binary operations
-            struct ir_value lhs = emit_expr(expr->binary.left);
-            struct ir_value rhs = emit_expr(expr->binary.right);
-            struct ir_value dst = make_temp();
+            ir_value_t lhs = emit_expr(expr->binary.left);
+            ir_value_t rhs = emit_expr(expr->binary.right);
+            ir_value_t dst = value_temp(expr->ty);
 
-            emit_binary(convert_binary_op(expr->tok), lhs, rhs, dst);
+            emit_binary(convert_binary_op(op), lhs, rhs, dst);
             return dst;
         }
-
         case EXPR_ASSIGNMENT: {
-            struct ir_value lhs = emit_object_value(expr->assignment.lvalue->identifier.sym);
+            ir_value_t lhs = value_object(expr->ty, expr->assignment.lvalue->identifier.sym);
+            ir_value_t rhs = emit_expr(expr->assignment.rvalue);
 
-            if (expr->tok.type == TOKEN_EQUAL) {
-                struct ir_value rhs = emit_expr(expr->assignment.rvalue);
-
+            // Normal assignment
+            if (expr->tok.kind == TOKEN_EQUAL) {
                 emit_copy(rhs, lhs);
                 return lhs;
             }
 
-            // Otherwise compound assignment (+= -= &= ...)
-            // lvalue = lvalue op rvalue
-            struct ir_value rhs = emit_expr(expr->assignment.rvalue);
-            emit_binary(convert_binary_op(expr->tok), lhs, rhs, lhs);
+            // a op= b:
+            //  left = a converted op_ty
+            //  right = left op b
+            //  a = result converted back to type of a
+            type_t *op_ty = expr->assignment.op_ty;
+            ir_value_t left = emit_convert(lhs, op_ty);
+            ir_value_t result = value_temp(op_ty);
+
+            emit_binary(convert_binary_op(expr->assignment.op.kind), left, rhs, result);
+            emit_copy(emit_convert(result, lhs.ty), lhs);
             return lhs;
         }
-
         case EXPR_PRE:
-        case EXPR_POST: {
-            bool is_incr = expr->tok.type == TOKEN_PLUS_PLUS;
+        case EXPR_POST:
+            ir_binary_op op = expr->unary.op.kind == TOKEN_PLUS_PLUS ? IR_BINARY_ADD : IR_BINARY_SUB;
 
-            struct expr *lhs_expr = expr->unary.operand;
-            struct ir_value lhs = emit_object_value(lhs_expr->identifier.sym);
+            ir_value_t lhs = emit_expr(expr->unary.operand);
+            ir_value_t one = value_constant(1, lhs.ty);
 
-            if (expr->kind == EXPR_POST) {
-                struct ir_value old_lhs = make_temp();
-
-                emit_copy(lhs, old_lhs);
-                emit_binary(is_incr ? IR_BINOP_ADD : IR_BINOP_SUB,
-                            lhs,
-                            ir_constant(1),
-                            lhs);
-
-                return old_lhs;
+            if (expr->kind == EXPR_PRE) {
+                emit_binary(op, lhs, one, lhs);
+                return lhs;
             }
 
-            emit_binary(is_incr ? IR_BINOP_ADD : IR_BINOP_SUB,
-                        lhs,
-                        ir_constant(1),
-                        lhs);
-
-            return lhs;
-        }
-
+            // post yields value pre incr/decr
+            ir_value_t old_lhs = value_temp(lhs.ty);
+            emit_copy(lhs, old_lhs);
+            emit_binary(op, lhs, one, lhs);
+            return old_lhs;
         case EXPR_CONDITIONAL: {
-            int else_label = make_label();
-            int end_label = make_label();
+            // c ? a : b:
+            //   if c == 0 jump else
+            //   dst = a; jump end
+            // else:
+            //   dst = b
+            // end:
+            ir_label_t else_label = temp_label();
+            ir_label_t end_label = temp_label();
 
-            struct ir_value dst = make_temp();
+            // Both branches are void calls: there is no value to copy
+            bool has_value = !type_is_void(expr->ty);
+            ir_value_t dst = has_value ? value_temp(expr->ty) : value_none();
 
-            struct ir_value cond = emit_expr(expr->conditional.condition);
+            ir_value_t cond = emit_expr(expr->conditional.condition);
             emit_jump_if_zero(cond, else_label);
 
-            struct ir_value then_val = emit_expr(expr->conditional.then_expr);
-            emit_copy(then_val, dst);
+            ir_value_t then_value = emit_expr(expr->conditional.then_expr);
+            if (has_value)
+                emit_copy(then_value, dst);
             emit_jump(end_label);
 
             emit_label(else_label);
 
-            struct ir_value else_val = emit_expr(expr->conditional.else_expr);
-            emit_copy(else_val, dst);
+            ir_value_t else_value = emit_expr(expr->conditional.else_expr);
+            if (has_value)
+                emit_copy(else_value, dst);
 
             emit_label(end_label);
             return dst;
         }
-
         case EXPR_CALL: {
-            struct symbol *sym = expr->call.callee->identifier.sym;
-            const char *calle = sym->ir_name;
+            symbol_t *calle = expr->call.callee->identifier.sym;
 
-            int arg_count = 0;
-            for (struct expr *arg = expr->call.args; arg; arg = arg->next)
-                arg_count++;
+            vector args;
+            VECTOR_INIT(&args, ir_value_t);
 
-            struct ir_value *args = NULL;
-            if (arg_count > 0)
-                args = calloc(arg_count, sizeof(struct ir_value));
-
-            int i = 0;
-            for (struct expr *arg = expr->call.args; arg; arg = arg->next)
-                args[i++] = emit_expr(arg);
-
-            struct type *ret_ty = expr->call.callee->type->func.return_type;
-
-            if (type_is_void(ret_ty)) {
-                emit_call(calle, args, arg_count, false, ir_constant(0));
-                return ir_constant(0); // Dummy value, should not be used
+            LIST_FOREACH(arg, &expr->call.args) {
+                ir_value_t value = emit_expr(arg);
+                vector_push(&args, &value);
             }
 
-            struct ir_value dst = make_temp();
-            
-            emit_call(calle, args, arg_count, true, dst);
+            ir_value_t dst = type_is_void(expr->ty)
+                ? value_none()
+                : value_temp(expr->ty);
 
+            emit_call(calle, args, dst);
             return dst;
         }
         case EXPR_CAST: {
-            struct ir_value result = emit_expr(expr->cast.operand);
-            if (expr->cast.target_type == expr->cast.operand->type)
-                return result;
+            ir_value_t src = emit_expr(expr->cast.operand);
 
-            struct ir_value dst = make_temp();
+            // (void)x: evaluate x for its side effects
+            if (type_is_void(expr->ty))
+                return value_none();
+
+            return emit_convert(src, expr->ty);
         }
-
-        default:
-            break;
     }
 }
 
-static void emit_decl_list(struct decl *decls)
+static void
+emit_declaration_list(ast_stmt_t *stmt)
 {
-    for (struct decl *decl = decls; decl; decl = decl->next) {
-        if (decl->kind != DECL_OBJECT) {
-            continue;
-        }
+    if (!stmt)
+        return;
 
-        if (decl->storage_duration != SD_AUTO)
+    LIST_FOREACH(decl, &stmt->decl.decls) {
+        if (decl->kind != DECL_OBJECT)
+            continue;
+
+        if (decl->sd != STORAGE_DURATION_AUTO)
             continue;
 
         if (decl->object.init) {
-            struct ir_value dst = ir_pseudo(decl->sym->ir_name);
-            struct ir_value src = emit_expr(decl->object.init);
-            
+            ir_value_t dst = value_object(decl->ty, decl->sym);
+            ir_value_t src = emit_expr(decl->object.init);
+
             emit_copy(src, dst);
         }
     }
 }
 
-static void emit_stmt(struct stmt *stmt)
+static void
+emit_stmt(ast_stmt_t *stmt)
 {
     if (!stmt)
         return;
@@ -516,32 +471,38 @@ static void emit_stmt(struct stmt *stmt)
     switch (stmt->kind) {
         case STMT_NULL:
             break;
-
         case STMT_EXPR:
-            emit_expr(stmt->expr_stmt.expr);
+            emit_expr(stmt->expr.expr);
             break;
-
+        case STMT_DECL:
+            emit_declaration_list(stmt);
+            break;
+        case STMT_BLOCK:
+            LIST_FOREACH(item, &stmt->block.items) {
+                emit_stmt(item);
+            }
+            break;
         case STMT_RETURN:
             if (stmt->return_stmt.expr)
-                emit_return_value(emit_expr(stmt->return_stmt.expr));
+                emit_return(emit_expr(stmt->return_stmt.expr));
             else
-                emit_return_void();
+                emit_return(value_none());
             break;
-
-        case STMT_IF: {
-            struct ir_value cond = emit_expr(stmt->if_stmt.condition);
+        case STMT_IF:
+            ir_value_t cond = emit_expr(stmt->if_stmt.condition);
 
             if (!stmt->if_stmt.else_stmt) {
-                int end_label = make_label();
+                ir_label_t end_label =
+                    make_label(IR_LABEL_TEMP, ir.next_label_id++);
 
                 emit_jump_if_zero(cond, end_label);
                 emit_stmt(stmt->if_stmt.then_stmt);
                 emit_label(end_label);
                 break;
-            } 
+            }
 
-            int end_label = make_label();
-            int else_label = make_label();
+            ir_label_t end_label = temp_label();
+            ir_label_t else_label = temp_label();
 
             emit_jump_if_zero(cond, else_label);
             emit_stmt(stmt->if_stmt.then_stmt);
@@ -552,265 +513,163 @@ static void emit_stmt(struct stmt *stmt)
 
             emit_label(end_label);
             break;
-        }
-
         case STMT_FOR: {
-            int start_label = make_label();
-            int break_label = get_or_create_label_id_cstr(stmt->for_stmt.break_label);
-            int continue_label = get_or_create_label_id_cstr(stmt->for_stmt.continue_label);
+            ir_label_t start_label = temp_label();
+            ir_label_t break_label =
+                make_label(IR_LABEL_BREAK, stmt->id);
+            ir_label_t continue_label =
+                make_label(IR_LABEL_CONTINUE, stmt->id);
 
-            if (stmt->for_stmt.init) {
-                if (stmt->for_stmt.init->is_decl)
-                    emit_decl_list(stmt->for_stmt.init->decls);
-                else
-                    emit_expr(stmt->for_stmt.init->expr);
-            }
+            emit_stmt(stmt->loop.init);
 
             emit_label(start_label);
 
-            if (stmt->for_stmt.condition) {
-                struct ir_value cond = emit_expr(stmt->for_stmt.condition);
-
+            if (stmt->loop.condition) {
+                ir_value_t cond = emit_expr(stmt->loop.condition);
                 emit_jump_if_zero(cond, break_label);
             }
 
-            emit_stmt(stmt->for_stmt.body);
+            emit_stmt(stmt->loop.body);
 
             emit_label(continue_label);
 
-            if (stmt->for_stmt.post)
-                emit_expr(stmt->for_stmt.post);
+            if (stmt->loop.post)
+                emit_expr(stmt->loop.post);
 
             emit_jump(start_label);
             emit_label(break_label);
             break;
         }
-
         case STMT_WHILE: {
-            int break_label = get_or_create_label_id_cstr(stmt->while_stmt.break_label);
-            int continue_label = get_or_create_label_id_cstr(stmt->while_stmt.continue_label);
+            ir_label_t break_label =
+                make_label(IR_LABEL_BREAK, stmt->id);
+            ir_label_t continue_label =
+                make_label(IR_LABEL_CONTINUE, stmt->id);
 
             emit_label(continue_label);
 
-            struct ir_value cond = emit_expr(stmt->while_stmt.condition);
+            ir_value_t cond = emit_expr(stmt->loop.condition);
             emit_jump_if_zero(cond, break_label);
 
-            emit_stmt(stmt->while_stmt.body);
+            emit_stmt(stmt->loop.body);
 
             emit_jump(continue_label);
             emit_label(break_label);
             break;
         }
-
         case STMT_DOWHILE: {
-            int start_label = make_label();
-            int break_label = get_or_create_label_id_cstr(stmt->dowhile_stmt.break_label);
-            int continue_label = get_or_create_label_id_cstr(stmt->dowhile_stmt.continue_label);
+            ir_label_t start_label = temp_label();
+            ir_label_t break_label =
+                make_label(IR_LABEL_BREAK, stmt->id);
+            ir_label_t continue_label =
+                make_label(IR_LABEL_CONTINUE, stmt->id);
 
             emit_label(start_label);
-
-            emit_stmt(stmt->dowhile_stmt.body);
-
+            emit_stmt(stmt->loop.body);
             emit_label(continue_label);
 
-            struct ir_value cond = emit_expr(stmt->dowhile_stmt.condition);
+            ir_value_t cond = emit_expr(stmt->loop.condition);
             emit_jump_if_not_zero(cond, start_label);
 
             emit_label(break_label);
             break;
         }
-
         case STMT_SWITCH: {
-            int break_label = get_or_create_label_id_cstr(stmt->switch_stmt.break_label);
-            
-            struct ir_value cond = emit_expr(stmt->switch_stmt.condition);
-            struct switch_annotation *ann = stmt->switch_stmt.annotation;
-            
-            /*
-             * Emit dispatch chain:
-             *   if cond == case_1 goto case_1_label
-             *   if cond == case_2 goto case_2_label ...
-             *   goto default_or_break
-             */
-            for (struct case_entry *entry = ann->cases; entry; entry = entry->next) {
-                struct stmt *case_node = entry->node;
+            ir_label_t break_label =
+                make_label(IR_LABEL_BREAK, stmt->id);
 
-                if (case_node->kind == STMT_DEFAULT)
-                    continue;
+            ir_value_t cond = emit_expr(stmt->switch_stmt.condition);
 
-                // TODO: Evaluate at compile time
-                int value = case_node->case_stmt.value->constant_value;
-                struct ir_value case_value = ir_constant(value);
-                
-                int case_label = get_or_create_label_id_cstr(case_node->case_stmt.label);
-
-                struct ir_value cmp = make_temp();
-                emit_binary(IR_BINOP_EQ, cond, case_value, cmp);
-                emit_jump_if_not_zero(cmp, case_label);
+            for (ast_stmt_t *c = stmt->switch_stmt.cases; c; c = c->case_stmt.next_case) {
+                ir_value_t value = value_constant(c->case_stmt.value, cond.ty);
+                ir_value_t matches = value_temp(type_int());
+                emit_binary(IR_BINARY_EQ, cond, value, matches);
+                emit_jump_if_not_zero(matches, make_label(IR_LABEL_CASE, c->id));
             }
 
-            if (ann->default_node) {
-                int default_label = get_or_create_label_id_cstr(ann->default_node->default_stmt.label);
-                emit_jump(default_label);
-            } else {
+            ast_stmt_t *default_case = stmt->switch_stmt.default_case;
+            if (default_case)
+                emit_jump(make_label(IR_LABEL_CASE, default_case->id));
+            else
                 emit_jump(break_label);
-            }
 
-            // The body itself emits cases/defaults or other statements
             emit_stmt(stmt->switch_stmt.body);
-
             emit_label(break_label);
             break;
         }
-
-        case STMT_DEFAULT: {
-            int label_id = get_or_create_label_id_cstr(stmt->default_stmt.label);
-
-            emit_label(label_id);
-
-            for (struct block_item *item = stmt->default_stmt.items; item; item = item->next)
-                emit_block_item(item);
+        case STMT_DEFAULT:
+            emit_label(make_label(IR_LABEL_CASE, stmt->id));
+            emit_stmt(stmt->default_stmt.stmt);
             break;
-        }
-
-        case STMT_CASE: {
-            int label_id = get_or_create_label_id_cstr(stmt->case_stmt.label);
-
-            emit_label(label_id);
-
-            for (struct block_item *item = stmt->case_stmt.items; item; item = item->next)
-                emit_block_item(item);
+        case STMT_CASE:
+            emit_label(make_label(IR_LABEL_CASE, stmt->id));
+            emit_stmt(stmt->case_stmt.stmt);
             break;
-        }
         case STMT_BREAK:
-            emit_jump(get_or_create_label_id_cstr(stmt->break_stmt.target_label));
+            emit_jump(make_label(IR_LABEL_BREAK, stmt->break_stmt.target->id));
             break;
         case STMT_CONTINUE:
-            emit_jump(get_or_create_label_id_cstr(stmt->continue_stmt.target_label));
+            emit_jump(make_label(IR_LABEL_CONTINUE, stmt->continue_stmt.target->id));
             break;
-
         case STMT_GOTO:
-            emit_jump(get_or_create_label_id_tok(&stmt->goto_stmt.label));
+            emit_jump(make_label(IR_LABEL_USER, stmt->goto_stmt.target->id));
             break;
-
-        case STMT_LABEL: {
-            int label_id = get_or_create_label_id_tok(&stmt->label_stmt.name);
-
-            emit_label(label_id);
+        case STMT_LABEL:
+            emit_label(make_label(IR_LABEL_USER, stmt->id));
             emit_stmt(stmt->label_stmt.stmt);
             break;
-        }
-
-        case STMT_BLOCK:
-            for (struct block_item *item = stmt->block.items; item; item = item->next)
-                emit_block_item(item);
-            break;
     }
 }
 
-static void emit_block_item(struct block_item *item)
+static void
+emit_fallthrough_return(ast_decl_t *decl)
 {
-    if (!item)
-        return;
+    type_t *return_ty = decl->ty->function.return_ty;
 
-    if (item->kind == BLOCK_ITEM_DECL)
-        emit_decl_list(item->decls);
+    if (type_is_void(return_ty))
+        emit_return(value_none());
     else
-        emit_stmt(item->stmt);
+        emit_return(value_constant(0, return_ty));
 }
 
-static void emit_static_variables(struct ir_program *ir)
+static void
+emit_function(ast_decl_t *decl)
 {
-    for (struct symbol *sym = all_symbols; sym; sym = sym->next) {
-        if (sym->kind != SYM_OBJECT)
-            continue;
+    ir_function_t *function = xcalloc(1, sizeof(ir_function_t));
+    function->sym = decl->sym;
+    VECTOR_INIT(&function->params, ir_value_t);
 
-        if (sym->storage_duration != SD_STATIC)
-            continue;
-
-        if (!sym->defined && !sym->tentative)
-            continue;
-
-        struct ir_static_variable *var = calloc(1, sizeof(struct ir_static_variable));
-        var->name = sym->ir_name;
-        var->linkage = sym->linkage;
-        var->init = sym->has_static_init ? sym->static_init : 0;
-        var->type = sym->ty;
-
-        append_static_variable(ir, var);
-    }
-}
-
-static void emit_function_params(struct ir_function *fn, struct decl *params)
-{
-    for (struct decl *param = params; param; param = param->next) {
-        struct ir_param *ir_param = calloc(1, sizeof(struct ir_param));
-        ir_param->name = param->ir_name;
-
-        append_param(fn, ir_param);
-    }
-}
-
-/*
- * Fallthrough of main means return 0.
- * Falltrhough of non-void functions is undefined behaviour.
- * For now emit 0 for non-void
- */
-static void emit_implicit_fallthrough_return(struct decl *fn_decl)
-{
-    struct type *ret_ty = fn_decl->type->func.return_type;
-
-    // TODO: Add some condition to not emit return if we can
-
-    if (type_is_void(ret_ty))
-        emit_return_void();
-    else
-        emit_return_value(ir_constant(0));
-}
-
-static struct ir_function *emit_function(struct decl *decl)
-{
-    struct ir_function *fn = calloc(1, sizeof(struct ir_function));
-    fn->name = decl->ir_name;
-    fn->linkage = decl->linkage;
-
-    emit_function_params(fn, decl->func.params);
-
-    current_function = fn;
-
-    hashmap_init(&label_ids);
-
-    emit_stmt(decl->func.body);
-
-    emit_implicit_fallthrough_return(decl);
-
-    hashmap_free(&label_ids);
-
-    current_function = NULL;
-
-    return fn;
-}
-
-struct ir_program *build_ir(struct ast_program *program)
-{
-    struct ir_program *ir = calloc(1, sizeof(struct ir_program));
-
-    current_function = NULL;
-    next_temp_id = 0;
-    next_label_id = 1;
-
-    for (struct decl *decl = program->decls; decl; decl = decl->next) {
-        if (decl->kind == DECL_OBJECT) {
-            continue;
-        }
-
-        if (decl->kind == DECL_FUNCTION && decl->func.body) {
-            struct ir_function *fn = emit_function(decl);
-            append_function(ir, fn);
-        }
+    LIST_FOREACH(param, &decl->function.params) {
+        ir_value_t value = value_object(param->ty, param->sym);
+        vector_push(&function->params, &value);
     }
 
-    emit_static_variables(ir);
+    ir.fn = function;
 
-    return ir;
+    emit_stmt(decl->function.body);
+    emit_fallthrough_return(decl);
+
+    ir.fn = nullptr;
+    
+    LIST_APPEND(&ir.program->fns, function);
+}
+
+ir_program_t *
+ir_build(const sema_result_t *sema)
+{
+    ir_program_t *program = xcalloc(1, sizeof(ir_program_t));
+    program->sema = sema;
+
+    ir = (ir_builder_t){
+        .program = program,
+        .next_pseudo_id = sema->symbol_count
+    };
+
+    LIST_FOREACH(decl, &sema->program->decls) {
+        if (decl->kind == DECL_FUNCTION && decl->function.body)
+            emit_function(decl);
+    }
+
+    program->pseudo_count = ir.next_pseudo_id;
+    return program;
 }

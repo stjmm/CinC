@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -std=c11 -pedantic
+CFLAGS=-std=c23 -Wall -Wextra -Wpedantic
 
 BUILD=build
 EXE=$(BUILD)/cinc
@@ -21,7 +21,7 @@ $(BUILD)/%.o: src/%.c
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 $(EXE): $(OBJ)
-	$(CC) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^
 
 -include $(DEP)
 
@@ -29,7 +29,7 @@ clean:
 	rm -rf $(BUILD)
 
 test: $(EXE)
-	@bash tests/test_runner.sh
+	@bash tests/run_tests
 
 run: all
 	@$(EXE)

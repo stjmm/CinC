@@ -1,48 +1,46 @@
 #ifndef CINC_SEMA_H
 #define CINC_SEMA_H
 
-#include <stdbool.h>
-
 #include "ast.h"
 
-enum symbol_kind {
-    SYM_OBJECT,
-    SYM_FUNCTION
-};
+typedef enum {
+    INIT_NONE,
+    INIT_TENTATIVE,
+    INIT_CONSTANT
+} init_kind;
 
-struct symbol {
-    enum symbol_kind kind;
+typedef enum {
+    SYMBOL_OBJECT,
+    SYMBOL_FUNCTION
+} symbol_kind;
 
-    const char *name;
-    int name_len;
+struct symbol_t {
+    symbol_kind kind;
 
-    struct type *ty;
-    struct decl *decl;
+    token_t name;
+    size_t id;
 
-    enum linkage linkage;
-    enum storage_duration storage_duration;
+    type_t *ty;
+    ast_decl_t *decl;
 
+    linkage linkage;
+
+    storage_duration sd;
+    init_kind init;
+    int64_t init_value;
     bool defined;
-    bool tentative;
 
-    bool has_static_init;
-    long static_init;
-
-    char *ir_name;
-
-    struct symbol *next;
+    symbol_t *next;
 };
 
-struct case_entry {
-    struct stmt *node;
-    struct case_entry *next;
-};
+typedef struct {
+    ast_program_t *program;
+    LIST(symbol_t) symbols;
+    size_t symbol_count;
+} sema_result_t;
 
-struct switch_annotation {
-    struct case_entry *cases;
-    struct stmt *default_node;
-};
-
-struct ast_program *sema_analysis(struct ast_program *program);
+bool sema_analyze(
+    sema_result_t *result,
+    ast_program_t *program);
 
 #endif

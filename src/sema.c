@@ -1,1456 +1,1132 @@
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-#include "ast.h"
-#include "base/hash_map.h"
-#include "lexer.h"
 #include "sema.h"
+#include "ast.h"
 #include "type.h"
+#include "diagnostics.h"
+#include "base/list.h"
+#include "base/hashmap.h"
+#include "base/vector.h"
+#include "base/memory.h"
 
-struct scope {
-    struct scope *parent;
-    hash_map ordinary;
-};
+#include <stdlib.h>
+#include <stdarg.h>
 
-struct loop_switch_ctx {
-    const char *break_label;
-    const char *continue_label;
-};
+typedef struct scope_t {
+    struct scope_t *parent;
+    hashmap ordinary;
+} scope_t;
 
-static struct scope *global_scope;
-static struct scope *current_scope;
-static struct decl *current_function;
+typedef struct {
+    ast_decl_t *decl; // Current function
+    type_t *return_ty;     
 
-static hash_map labels;
+    ast_stmt_t *loop; // Current continue target
+    ast_stmt_t *breakable; // Current break target
+    ast_stmt_t *sw; // Current owner of case/default
+    ast_stmt_t *last_case; // Last case of switch
 
-static hash_map external_symbols;
-static hash_map internal_symbols;
+    hashmap labels; // name -> STMT_LABEL
+    vector gotos;   // ast_stmt_t *
+} function_ctx_t;
 
-// TODO: Change this shit
-struct symbol *all_symbols = NULL;
-static struct symbol *all_symbols_tail = NULL;
+typedef struct {
+    sema_result_t *result;
 
-static int unique_counter;
-static bool had_error;
+    scope_t *scope;
+    hashmap linked_symbols;
+    function_ctx_t fn_ctx;
 
-static void error(struct token *tok, const char *message) {
-    int col = (int)(tok->start - tok->line_start);
+    uint32_t next_symbol_id;
+} sema_t;
 
-    fprintf(stderr, "%s: Error at line %d, col %d: %s\n", tok->filename,
-            tok->line, col, message);
+static sema_t sema;
 
-    const char *line_end = tok->line_start;
-    while (*line_end != '\0' && *line_end != '\n')
-        line_end++;
-    fprintf(stderr, "  %.*s\n", (int)(line_end - tok->line_start),
-            tok->line_start);
-
-    fprintf(stderr, "  %*s", col, "");
-    for (int i = 0; i < (tok->length > 0 ? tok->length : 1); i++)
-        fputc('^', stderr);
-    fputc('\n', stderr);
-
-    had_error = true;
+static void
+error(token_t *tok, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    diagnostics_error(tok, fmt, args);
+    va_end(args);
 }
 
-static char *make_unique(const char *name, int length) {
-    int n = snprintf(NULL, 0, "%.*s.%d", length, name, unique_counter);
-    char *buf = malloc(n + 1);
-    snprintf(buf, n + 1, "%.*s.%d", length, name, unique_counter++);
-
-    return buf;
+static scope_t *
+scope_push(scope_t *parent)
+{
+    scope_t *scope = xcalloc(1, sizeof(scope_t));
+    scope->parent = parent;
+    hashmap_init(&scope->ordinary);
+    return scope;
 }
 
-static struct scope *scope_push(struct scope *parent) {
-    struct scope *s = calloc(1, sizeof(struct scope));
-
-    hashmap_init(&s->ordinary);
-    s->parent = parent;
-
-    return s;
-}
-
-static struct scope *scope_pop(struct scope *s) {
-    struct scope *parent = s->parent;
-
-    hashmap_free(&s->ordinary);
-    free(s);
-
+static scope_t *
+scope_pop(scope_t *scope)
+{
+    scope_t *parent = scope->parent;
+    hashmap_free(&scope->ordinary);
+    free(scope);
     return parent;
 }
 
-static bool is_file_scope(void) { return current_scope == global_scope; }
+static symbol_t *
+scope_lookup(
+    scope_t *scope,
+    const char *name,
+    size_t length)
+{
+    for (scope_t *sc = scope; sc; sc = sc->parent) {
+        symbol_t *symbol = hashmap_get(
+            &sc->ordinary,
+            name,
+            length);
 
-static struct symbol *scope_lookup_current(struct scope *s, const char *name,
-        int length) {
-    if (!s)
-        return NULL;
-
-    return hashmap_get(&s->ordinary, name, length);
-}
-
-static struct symbol *scope_lookup_visible(struct scope *s, const char *name,
-        int length) {
-    for (struct scope *scp = s; scp != NULL; scp = scp->parent) {
-        struct symbol *sym = hashmap_get(&scp->ordinary, name, length);
-        if (sym)
-            return sym;
+        if (symbol)
+            return symbol;
     }
 
-    return NULL;
+    return nullptr;
 }
 
-static void append_to_all_symbols(struct symbol *sym) {
-    sym->next = NULL;
-
-    if (!all_symbols) {
-        all_symbols = sym;
-        all_symbols_tail = sym;
-        return;
-    }
-
-    all_symbols_tail->next = sym;
-    all_symbols_tail = sym;
+static symbol_t *
+scope_lookup_current(
+    scope_t *scope,
+    const char *name,
+    size_t length)
+{
+    return hashmap_get(&scope->ordinary, name, length);
 }
 
-static struct symbol *create_symbol_from_decl(struct decl *d) {
-    struct symbol *sym = calloc(1, sizeof(struct symbol));
-    sym->kind = d->kind == DECL_FUNCTION ? SYM_FUNCTION : SYM_OBJECT;
-    sym->name = d->name.start;
-    sym->name_len = d->name.length;
-    sym->ty = d->type;
-    sym->decl = d;
-    sym->linkage = d->linkage;
-    sym->storage_duration = d->storage_duration;
-    sym->defined = d->is_definition;
-    sym->tentative = d->is_tentative;
-
-    if (d->linkage == LINK_EXTERNAL)
-        sym->ir_name = token_to_cstr(d->name);
-    else
-        sym->ir_name = make_unique(d->name.start, d->name.length);
-
-    append_to_all_symbols(sym);
-
-    return sym;
+static bool
+is_global_scope(void)
+{
+    return sema.scope->parent == nullptr;
 }
 
-static bool has_linkage(struct symbol *sym) {
-    if (sym->linkage == LINK_EXTERNAL || sym->linkage == LINK_INTERNAL)
-        return true;
+static symbol_t *
+symbol_new(ast_decl_t *decl)
+{
+    symbol_t *symbol = xcalloc(1, sizeof(symbol_t));
+    symbol->kind = decl->kind == DECL_FUNCTION
+        ? SYMBOL_FUNCTION : SYMBOL_OBJECT;
+    symbol->name = decl->name;
+    symbol->id = sema.next_symbol_id++;
+    symbol->decl= decl;
+    symbol->ty = decl->ty;
+    symbol->linkage = decl->link;
+    symbol->sd = decl->sd;
+    symbol->defined = decl->kind == DECL_FUNCTION && decl->is_definition;
+    symbol->init = decl->is_tentative ? INIT_TENTATIVE : INIT_NONE;
 
-    return false;
+    if (symbol->sd == STORAGE_DURATION_STATIC)
+        LIST_APPEND(&sema.result->symbols, symbol);
+
+    return symbol;
 }
 
-static enum linkage compute_extern_linkage(struct symbol *prior_visible) {
-    // Extern inherits a visible prior linkage
-    if (prior_visible && has_linkage(prior_visible)) {
-        return prior_visible->linkage;
-    }
+/*
+ * Expression analysis
+ */
 
-    return LINK_EXTERNAL;
+static int64_t
+constant_convert(int64_t value, type_t *ty)
+{
+    if (type_is_int(ty))
+        return (int32_t)value;
+
+    return value;
 }
 
-static enum linkage determine_decl_linkage(struct decl *d,
-        struct symbol *prior_visible) {
-    // Parameters have no linkage
-    if (d->is_parameter)
-        return LINK_NONE;
+static bool
+eval_constant(ast_expr_t *expr, int64_t *out_value)
+{
+    if (!expr)
+        return false;
 
-    /*
-     * At file-scope
-     *   static int(void); -> internal linkage
-     *   extern int x;     -> external linkage
-     *   int x;            -> external
-     */
-    if (d->kind == DECL_FUNCTION) {
-        if (d->storage_class == SC_STATIC)
-            return LINK_INTERNAL;
+    switch (expr->kind) {
+        case EXPR_INT_CONSTANT:
+        case EXPR_LONG_CONSTANT:
+            *out_value = expr->constant_value;
+            return true;
+        case EXPR_CAST: {
+            int64_t value;
 
-        return compute_extern_linkage(prior_visible);
-    }
+            if (!type_is_integer(expr->ty) ||
+                    !eval_constant(expr->cast.operand, &value)) {
+                return false;
+            }
 
-    if (is_file_scope()) {
-        if (d->storage_class == SC_STATIC)
-            return LINK_INTERNAL;
-
-        if (d->storage_class == SC_EXTERN)
-            return compute_extern_linkage(prior_visible);
-
-        if (d->storage_class == SC_NONE)
-            return LINK_EXTERNAL;
-
-        // Invalid at file scope, validate_decl should already error report
-        return LINK_NONE;
-    }
-
-    // Block scope
-    if (d->storage_class == SC_EXTERN)
-        return compute_extern_linkage(prior_visible);
-
-    return LINK_NONE;
-}
-
-static enum storage_duration determine_storage_duration(struct decl *d) {
-    // Function is always static
-    if (d->kind == DECL_FUNCTION)
-        return SD_STATIC;
-
-    // File scope objects have static duration
-    if (is_file_scope())
-        return SD_STATIC;
-
-    if (d->storage_class == SC_STATIC || d->storage_class == SC_EXTERN)
-        return SD_STATIC;
-
-    // Normal block scope objects and parameters
-    return SD_AUTO;
-}
-
-static void classify_decl_definition(struct decl *d) {
-    d->is_definition = false;
-    d->is_tentative = false;
-
-    /*
-     * Function:
-     *   int foo(void);   declaration
-     *   int foo(void) {} definition
-     */
-    if (d->kind == DECL_FUNCTION) {
-        d->is_definition = d->func.body != NULL;
-        return;
-    }
-
-    /*
-     * File scope objects:
-     *   int x = 1; definition
-     *   extern int x = 1; definition
-     *   static int x = 1; definition
-     *
-     *   int x;        tentative
-     *   static int x; tentative
-     *
-     *   extern int x; declaration
-     */
-    if (is_file_scope()) {
-        if (d->object.init) {
-            d->is_definition = true;
-            return;
+            *out_value = constant_convert(value, expr->ty);
+            return true;
         }
+        case EXPR_UNARY: {
+            int64_t value;
 
-        if (d->storage_class == SC_NONE || d->storage_class == SC_STATIC) {
-            d->is_tentative = true;
-            return;
+            if (!eval_constant(expr->unary.operand, &value))
+                return false;
+
+            switch (expr->unary.op.kind) {
+                case TOKEN_PLUS:
+                    break;
+                case TOKEN_MINUS:
+                    value = (int64_t)(0 - (uint64_t)value);
+                    break;
+                case TOKEN_TILDE:
+                    value = ~value;
+                    break;
+                case TOKEN_BANG:
+                    value = !value;
+                    break;
+                default:
+                    return false;
+            }
+
+            *out_value = constant_convert(value, expr->ty);
+            return true;
         }
+        case EXPR_CONDITIONAL: {
+            int64_t condition;
 
-        return;
+            if (!eval_constant(expr->conditional.condition, &condition))
+                return false;
+
+            return eval_constant(condition
+                    ? expr->conditional.then_expr
+                    : expr->conditional.else_expr, out_value);
+        }
+        case EXPR_BINARY: {
+            token_kind op = expr->binary.op.kind;
+            int64_t a, b;
+
+            if (!eval_constant(expr->binary.left, &a))
+                return false;
+
+            if (op == TOKEN_AND_AND && !a) {
+                *out_value = 0;
+                return true;
+            }
+
+            if (op == TOKEN_OR_OR && a) {
+                *out_value = 1;
+                return true;
+            }
+
+            if (!eval_constant(expr->binary.right, &b))
+                return false;
+
+            uint64_t ua = (uint64_t)a;
+            uint64_t ub = (uint64_t)b;
+
+            switch (op) {
+                case TOKEN_PLUS:
+                    a = (int64_t)ua + ub;
+                    break;
+                case TOKEN_MINUS:
+                    a = (int64_t)ua - ub;
+                    break;
+                case TOKEN_STAR:
+                    a = (int64_t)ua * ub;
+                    break;
+                case TOKEN_SLASH:
+                    if (b == 0)
+                        return false;
+                    a = (b == -1) ? (int64_t)(0 - ua) : a / b;
+                    break;
+                case TOKEN_PERCENT:
+                    if (b == 0)
+                        return false;
+                    a = (b == -1) ? 0 : a % b;
+                    break;
+                case TOKEN_AND:
+                    a = a & b;
+                    break;
+                case TOKEN_OR:
+                    a = a | b;
+                    break;
+                case TOKEN_CARET:
+                    a = a ^ b;
+                    break;
+                case TOKEN_LESS_LESS:
+                case TOKEN_GREATER_GREATER:
+                    if (b < 0 || b >= (int64_t)type_size(expr->ty) * 8)
+                        return false;
+                    a = (op == TOKEN_LESS_LESS)
+                        ? (int64_t)(ua << b)
+                        : a >> b;
+                    break;
+                case TOKEN_EQUAL_EQUAL:
+                    a = a == b;
+                    break;
+                case TOKEN_BANG_EQUAL:
+                    a = a != b;
+                    break;
+                case TOKEN_LESS:
+                    a = a < b;
+                    break;
+                case TOKEN_LESS_EQUAL:
+                    a = a <= b;
+                    break;
+                case TOKEN_GREATER:
+                    a = a > b;
+                    break;
+                case TOKEN_GREATER_EQUAL:
+                    a = a >= b;
+                    break;
+                case TOKEN_AND_AND:
+                case TOKEN_OR_OR:
+                    a = b != 0;
+                    break;
+                default:
+                    return false;
+            }
+
+            *out_value = constant_convert(a, expr->ty);
+            return true;
+        }
+        default:
+            return false;
     }
-
-    // Block scope object: declaration only if extern
-    if (d->storage_class != SC_EXTERN)
-        d->is_definition = true;
 }
 
-static void validate_for_init_decls(struct decl *decls) {
-    for (struct decl *d = decls; d; d = d->next) {
-        if (d->kind != DECL_OBJECT) {
-            error(&d->name, "For-loop init declaration must declare an object");
-            continue;
-        }
+static void
+convert_to_type(ast_expr_t **slot, type_t *target)
+{
+    ast_expr_t *expr = *slot;
 
-        if (d->storage_class != SC_NONE && d->storage_class != SC_AUTO &&
-                d->storage_class != SC_REGISTER)
-            error(&d->name, "Illegal storage class for for-init");
-    }
-}
-
-static void validate_function_params(struct decl *fn) {
-    hash_map params;
-    hashmap_init(&params);
-
-    for (struct decl *p = fn->func.params; p; p = p->next) {
-        if (type_is_void(p->type))
-            error(&p->name, "Function parameter cannot be type void");
-
-        if (p->storage_class != SC_NONE && p->storage_class != SC_REGISTER)
-            error(&p->name,
-                    "Only 'register' storage class can be used as a parameter");
-
-        if (p->name.length > 0 && p->name.start != NULL) {
-            if (hashmap_get(&params, p->name.start, p->name.length))
-                error(&p->name, "Duplicate parameter definiton");
-
-            hashmap_set(&params, p->name.start, p->name.length, p);
-        }
-    }
-
-    hashmap_free(&params);
-}
-
-static void validate_decl(struct decl *d) {
-    if (is_file_scope() &&
-            (d->storage_class == SC_AUTO || d->storage_class == SC_REGISTER)) {
-        error(&d->name, "Illegal storage class at file scope");
-    }
-
-    // TODO: Check typedef stuff
-
-    // Validate function
-    if (d->kind == DECL_FUNCTION) {
-        validate_function_params(d);
-
-        if (!is_file_scope() && d->storage_class != SC_NONE &&
-                d->storage_class != SC_EXTERN) {
-            error(&d->name, "Block-scope function declaration may only use extern");
-        }
-
-        if (d->func.body && d->storage_class != SC_NONE &&
-                d->storage_class != SC_EXTERN && d->storage_class != SC_STATIC) {
-            error(&d->name, "Function definition may only use extern or static");
-        }
-
-        return;
-    }
-
-    // Validate objects
-    if (type_is_void(d->type))
-        error(&d->name, "Object cannot have type void");
-
-    if (!is_file_scope() && d->storage_class == SC_EXTERN && d->object.init)
-        error(&d->name,
-                "Block-scope extern declaration cannot have an initializer");
-}
-
-static struct symbol *
-merge_redeclaration_into_symbol(struct decl *d, struct symbol *sym,
-        bool install_in_current_scope) {
-    if (d->linkage != sym->linkage)
-        error(&d->name, "Conflicting linkage for declaration");
-
-    if (!types_compatible(d->type, sym->ty)) {
-        error(&d->name, "Confilcting declaration types");
-    } else {
-        sym->ty = type_composite(sym->ty, d->type);
-        d->type = sym->ty;
-    }
-
-    if (sym->defined && d->is_definition)
-        error(&d->name, "Redeclaration");
-
-    sym->defined |= d->is_definition;
-    sym->tentative |= d->is_tentative;
-
-    d->sym = sym;
-    d->ir_name = sym->ir_name;
-
-    if (install_in_current_scope)
-        hashmap_set(&current_scope->ordinary, d->name.start, d->name.length, sym);
-
-    return sym;
-}
-
-static struct symbol *bind_declaration_symbol(struct decl *d) {
-    struct symbol *prior_visible =
-        scope_lookup_visible(current_scope, d->name.start, d->name.length);
-
-    d->linkage = determine_decl_linkage(d, prior_visible);
-    d->storage_duration = determine_storage_duration(d);
-    classify_decl_definition(d);
-
-    struct symbol *prior_current =
-        scope_lookup_current(current_scope, d->name.start, d->name.length);
-
-    // Same scope declaration
-    if (prior_current) {
-        if (d->linkage == LINK_NONE || prior_current->linkage == LINK_NONE) {
-            error(&d->name, "Duplicate declaration");
-            d->sym = prior_current;
-            d->ir_name = prior_current->ir_name;
-            return prior_current;
-        }
-
-        return merge_redeclaration_into_symbol(d, prior_current, false);
-    }
-
-    /* Visible linked declaration
-     *
-     * Example:
-     *   int x;
-     *   int foo(void) {
-     *      extern int x;
-     *   }
-     */
-    if (prior_visible && has_linkage(prior_visible) &&
-            d->linkage == prior_visible->linkage) {
-        return merge_redeclaration_into_symbol(d, prior_visible, true);
-    }
-
-    /*
-     * External linkage in unreleated scope
-     *
-     * Example:
-     *   int main(void) {
-     *      int foo(int);
-     *   }
-     *   int bar(void) {
-     *      int foo(int, int);
-     *   }
-     */
-    if (d->linkage == LINK_EXTERNAL) {
-        struct symbol *prior_external =
-            hashmap_get(&external_symbols, d->name.start, d->name.length);
-
-        if (prior_external)
-            return merge_redeclaration_into_symbol(d, prior_external, true);
-    }
-
-    // Internal/external linkage confict in same translation unit
-    if (d->linkage == LINK_EXTERNAL) {
-        struct symbol *prior_internal =
-            hashmap_get(&internal_symbols, d->name.start, d->name.length);
-
-        if (prior_internal)
-            error(&d->name, "Identifier previously declared with internal linkage");
-    }
-
-    if (d->linkage == LINK_INTERNAL) {
-        struct symbol *prior_external =
-            hashmap_get(&external_symbols, d->name.start, d->name.length);
-
-        if (prior_external)
-            error(&d->name, "Identifier previously declared with external linkage");
-    }
-
-    /*
-     * New symbol
-     */
-    struct symbol *sym = create_symbol_from_decl(d);
-
-    hashmap_set(&current_scope->ordinary, d->name.start, d->name.length, sym);
-
-    if (d->linkage == LINK_EXTERNAL) {
-        hashmap_set(&external_symbols, d->name.start, d->name.length, sym);
-    } else if (d->linkage == LINK_INTERNAL) {
-        hashmap_set(&internal_symbols, d->name.start, d->name.length, sym);
-    }
-
-    d->sym = sym;
-    d->ir_name = sym->ir_name;
-
-    return sym;
-}
-
-static void check_call_args(struct expr *expr) {
-    struct type *fn_ty = expr->call.callee->type;
-
-    if (!fn_ty->func.has_prototype)
+    if (type_compatible(expr->ty, target))
         return;
 
-    int arg_count = 0;
-    for (struct expr *arg = expr->call.args; arg; arg = arg->next)
-        arg_count++;
+    ast_expr_t *next = expr->next;
+    expr->next = nullptr;
 
-    // TODO: Change the error function to handle stuff like "%s %s"
-    if (arg_count != fn_ty->func.param_count) {
-        error(&expr->tok, "Wrong number of function arguments");
-        return;
-    }
-
-    struct expr *arg = expr->call.args;
-    struct decl *param = fn_ty->func.params;
-    for (; arg && param; arg = arg->next, param = param->next) {
-        if (!types_compatible(arg->type, param->type))
-            error(&arg->tok, "Argument type does not match parameter type");
-    }
-}
-
-static void convert_expr_to(struct expr **slot, struct type *target) {
-    struct expr *e = *slot;
-
-    if (types_compatible(e->type, target))
-        return;
-
-    struct expr *next = e->next;
-    e->next = NULL;
-
-    struct expr *cast = expr_new(EXPR_CAST, e->tok);
-    cast->cast.target_type = target;
-    cast->cast.operand = e;
-    cast->type = target;
+    ast_expr_t *cast = ast_expr_new(EXPR_CAST, expr->tok);
+    cast->ty = target;
+    cast->cast.target_ty = target;
+    cast->cast.operand = expr;
     cast->is_lvalue = false;
 
-    // Preserve linked list structure, for expr_args
     cast->next = next;
     *slot = cast;
 }
 
-static void analyze_expr(struct expr *expr) {
+static void
+analyze_expr(ast_expr_t *expr)
+{
     if (!expr)
         return;
 
     switch (expr->kind) {
         case EXPR_INT_CONSTANT:
-            expr->type = type_int();
+            expr->ty = type_int();
             expr->is_lvalue = false;
             break;
-
         case EXPR_LONG_CONSTANT:
-            expr->type = type_long();
+            expr->ty = type_long();
             expr->is_lvalue = false;
             break;
-
-        case EXPR_IDENTIFIER: {
-            struct symbol *sym =
-              scope_lookup_visible(current_scope, expr->identifier.name.start,
-                      expr->identifier.name.length);
+        case EXPR_IDENTIFIER:
+            symbol_t *sym = scope_lookup(
+                    sema.scope,
+                    expr->tok.start,
+                    expr->tok.len);
 
             if (!sym) {
-              error(&expr->tok, "Undeclared identifier");
-              expr->type = type_int();
-              expr->is_lvalue = false;
-              return;
+                error(&expr->tok, 
+                        "Undeclared identifier '%.*s'",
+                        expr->tok.len,
+                        expr->tok.start);
+                expr->ty = type_int();
+                expr->is_lvalue = false;
+                break;
             }
 
             expr->identifier.sym = sym;
-            expr->type = sym->ty;
-            expr->is_lvalue = sym->kind == SYM_OBJECT;
+            expr->ty = sym->ty;
+            expr->is_lvalue = sym->kind == SYMBOL_OBJECT;
             break;
-        }
-
-        case EXPR_ASSIGNMENT: {
-            analyze_expr(expr->assignment.lvalue);
-            analyze_expr(expr->assignment.rvalue);
-
-            if (!expr->assignment.lvalue->is_lvalue)
-              error(&expr->assignment.lvalue->tok, "Left side is not assignable");
-
-            // if (!types_compatible(expr->assignment.lvalue->type,
-            //             expr->assignment.rvalue->type))
-            //     error(&expr->tok, "Assignment types are not compatible");
-
-            struct type *left_type = expr->assignment.lvalue->type;
-            convert_expr_to(&expr->assignment.rvalue, left_type);
-
-            expr->type = expr->assignment.lvalue->type;
+        case EXPR_UNARY:
+            analyze_expr(expr->unary.operand);
             expr->is_lvalue = false;
-            break;
-        }
 
+            if (!type_is_arithmetic(expr->unary.operand->ty)) {
+                error(&expr->tok, "Invalid operand type");
+                expr->ty = type_int();
+                break;
+            }
+
+            expr->ty = expr->unary.op.kind == TOKEN_BANG
+                ? type_int()
+                : expr->unary.operand->ty;
+
+            break;
         case EXPR_PRE:
         case EXPR_POST:
             analyze_expr(expr->unary.operand);
 
             if (!expr->unary.operand->is_lvalue)
-              error(&expr->tok, "Operand of increment/decrement must be an lvalue");
+                error(&expr->tok,
+                        "Operand of increment/decrement must be an lvalue");
 
-            expr->type = expr->unary.operand->type;
+            expr->ty = expr->unary.operand->ty;
             expr->is_lvalue = false;
             break;
-
-        case EXPR_UNARY:
-            analyze_expr(expr->unary.operand);
-
-            if (expr->unary.op.type == TOKEN_BANG)
-                expr->type = type_int();
-            else
-                expr->type = expr->unary.operand->type;
-
-            expr->is_lvalue = false;
-            break;
-
         case EXPR_BINARY:
             analyze_expr(expr->binary.left);
             analyze_expr(expr->binary.right);
 
-            struct expr **left = &expr->binary.left;
-            struct expr **right = &expr->binary.right;
-            enum token_type op = expr->binary.op.type;
+            type_t *left_ty = expr->binary.left->ty;
+            type_t *right_ty = expr->binary.right->ty;
+            expr->is_lvalue = false;
 
-            /*
-             * Logical operators: lhs && rhs, lhs || rhs
-             * must be scalar, and the result is int.
-             */
-            if (op == TOKEN_AND_AND || op == TOKEN_OR_OR) {
-                if (!type_is_scalar((*left)->type)) {
-                    error(&(*left)->tok, "Left operand of logical operator must have scalar type");
+            if (!type_is_arithmetic(left_ty) ||
+                    !type_is_arithmetic(right_ty)) {
+                error(&expr->tok, "Invalid operand type");
+                expr->ty = type_int();
+                break;
+            }
 
-                }
-                    if (!type_is_scalar((*right)->type)) {
-                        error(&(*left)->tok, "Right operand of logical operator must have scalar type");
-                    }
+            type_t *common_ty =
+                type_usual_arithmetic_conversion(left_ty, right_ty);
 
-                    expr->type = type_int();
-                    expr->is_lvalue = false;
+            switch (expr->binary.op.kind) {
+                case TOKEN_AND_AND:
+                case TOKEN_OR_OR:
+                    expr->ty = type_int();
                     break;
-            }
-
-            /*
-             * Bitwise shift: lhs << rhs, lhs >> rhs
-             * must be integet, result has left type.
-             */
-            if (op == TOKEN_LESS_LESS || op == TOKEN_GREATER_GREATER) {
-                if (!type_is_integer((*left)->type)) {
-                    error(&(*left)->tok, "Left operand of bitwise shift operator must have integer type");
-                }
-
-                if (!type_is_integer((*right)->type)) {
-                    error(&(*left)->tok, "Right operand of bitwise shift operator must have integer type");
-                }
-
-                expr->type = (*left)->type;
-                expr->is_lvalue = false;
-                break;
-            }
-
-            if (!type_is_arithmetic((*left)->type)) {
-                error(&(*left)->tok, "Left operand must have arithmetic type");
-                expr->type = type_int();
-                expr->is_lvalue = false;
-                break;
-            }
-            if (!type_is_arithmetic((*right)->type)) {
-                error(&(*right)->tok, "Right operand must have arithmetic type");
-                expr->type = type_int();
-                expr->is_lvalue = false;
-                break;
-            }
-
-            struct type *common_type =
-                type_get_common(expr->binary.left->type, expr->binary.right->type);
-            if (!common_type) {
-                error(&expr->tok, "Operands have incompatible types");
-                expr->type = type_int();
-                expr->is_lvalue = false;
-                break;
-            }
-
-            // Arithmetic operators use the usual arithmetic
-            // conversion. Their types have the common type.
-            switch (expr->binary.op.type) {
-                case TOKEN_PLUS:
-                case TOKEN_MINUS:
-                case TOKEN_STAR:
-                case TOKEN_SLASH:
-                case TOKEN_PERCENT:
-                    convert_expr_to(left, common_type);
-                    convert_expr_to(right, common_type);
-                    expr->type = common_type;
+                case TOKEN_LESS_LESS:
+                case TOKEN_GREATER_GREATER:
+                    expr->ty = left_ty;
                     break;
-
-                    // Bitwise require integers
-                case TOKEN_AND:
-                case TOKEN_OR:
-                case TOKEN_CARET:
-                    if (!type_is_integer((*left)->type))
-                        error(&(*left)->tok, "Left operand must have an integer type");
-                    if (!type_is_integer((*right)->type))
-                        error(&(*left)->tok, "Right operand must have an integer type");
-                    convert_expr_to(left, common_type);
-                    convert_expr_to(right, common_type);
-
-                    expr->type = common_type;
-                    break;
-
-                    // Usual arithmetic conversions, but
-                    // return type is int
                 case TOKEN_EQUAL_EQUAL:
                 case TOKEN_BANG_EQUAL:
                 case TOKEN_LESS:
                 case TOKEN_LESS_EQUAL:
                 case TOKEN_GREATER:
                 case TOKEN_GREATER_EQUAL:
-                    convert_expr_to(left, common_type);
-                    convert_expr_to(right, common_type);
-                    expr->type = type_int();
+                    convert_to_type(&expr->binary.left, common_ty);
+                    convert_to_type(&expr->binary.right, common_ty);
+                    expr->ty = type_int();
                     break;
                 default:
-                    error(&expr->tok, "Unsupported operation.");
-                    expr->type = common_type;
+                    convert_to_type(&expr->binary.left, common_ty);
+                    convert_to_type(&expr->binary.right, common_ty);
+                    expr->ty = common_ty;
                     break;
-                }
+            }
+            break;
+        case EXPR_ASSIGNMENT:
+            analyze_expr(expr->assignment.lvalue);
+            analyze_expr(expr->assignment.rvalue);
 
-                expr->is_lvalue = false;
+            type_t *lvalue_ty = expr->assignment.lvalue->ty;
+            type_t *rvalue_ty = expr->assignment.rvalue->ty;
+
+            expr->ty = lvalue_ty;
+            expr->is_lvalue = false;
+
+            if (!(expr->assignment.lvalue->is_lvalue && type_is_object(expr->ty))) {
+                error(&expr->tok,
+                        "Left side is not assignable");
                 break;
+            }
 
+            if (!type_is_arithmetic(rvalue_ty)) {
+                error(&expr->tok, "Invalid operand types");
+                break;
+            }
+
+            token_kind op = expr->assignment.op.kind;
+            if (op == TOKEN_EQUAL) {
+                // a = ... is converted to a type
+                convert_to_type(&expr->assignment.rvalue, lvalue_ty);
+            } else if (op == TOKEN_LESS_LESS_EQUAL || op == TOKEN_GREATER_GREATER_EQUAL) {
+                // a <<= is computed in type of a
+                expr->assignment.op_ty = lvalue_ty;
+            } else {
+                // a + b is computed in common type but
+                // result is in a type
+                type_t *common_ty = type_usual_arithmetic_conversion(lvalue_ty, rvalue_ty);
+                expr->assignment.op_ty = common_ty;
+                convert_to_type(&expr->assignment.rvalue, common_ty);
+            }
+            break;
         case EXPR_CONDITIONAL:
-                analyze_expr(expr->conditional.condition);
-                analyze_expr(expr->conditional.then_expr);
-                analyze_expr(expr->conditional.else_expr);
+            analyze_expr(expr->conditional.condition);
+            analyze_expr(expr->conditional.then_expr);
+            analyze_expr(expr->conditional.else_expr);
 
-                if (!type_is_scalar(expr->conditional.condition->type)) {
-                    error(&expr->conditional.condition->tok,
-                            "Conditional operator must have scalar type");
-                }
-
-                struct type *then_ty = expr->conditional.then_expr->type;
-                struct type *else_ty = expr->conditional.else_expr->type;
-
-                if (type_is_arithmetic(then_ty) &&
-                        type_is_arithmetic(else_ty)) {
-                    struct type *common = type_get_common(then_ty, else_ty);
-
-                    convert_expr_to(&expr->conditional.then_expr, common);
-                    convert_expr_to(&expr->conditional.else_expr, common);
-                    expr->type = common;
-                } else {
-                    error(&expr->tok,
-                            "Conditional expression arms have incompatible types");
-                    expr->type = type_int();
-                }
-
-                expr->type = expr->conditional.then_expr->type;
-                expr->is_lvalue = false;
-                break;
-
+            type_t *then_ty = expr->conditional.then_expr->ty;
+            type_t *else_ty = expr->conditional.else_expr->ty;
+            if (type_is_arithmetic(then_ty) &&
+                    type_is_arithmetic(else_ty)) {
+                type_t *common =
+                    type_usual_arithmetic_conversion(then_ty, else_ty);
+                convert_to_type(&expr->conditional.then_expr, common);
+                convert_to_type(&expr->conditional.else_expr, common);
+                expr->ty = common;
+            } else if (type_is_void(then_ty) && type_is_void(else_ty)) {
+                expr->ty = type_void();
+            } else {
+                error(&expr->tok, "Incompatible operand types");
+                expr->ty = type_int();
+            }
+            break;
         case EXPR_CALL:
-                analyze_expr(expr->call.callee);
+            analyze_expr(expr->call.callee);
+            expr->is_lvalue = false;
 
-                for (struct expr *arg = expr->call.args; arg; arg = arg->next)
+            type_t *fn_ty = expr->call.callee->ty;
+            if (!type_is_function(fn_ty)) {
+                error(&expr->tok, "Called object is not a function");
+
+                LIST_FOREACH(arg, &expr->call.args) {
                     analyze_expr(arg);
-
-                if (!type_is_function(expr->call.callee->type)) {
-                    error(&expr->call.callee->tok, "Called object is not a function");
-                    expr->type = type_int();
-                    expr->is_lvalue = false;
-                    return;
                 }
 
-                check_call_args(expr);
-
-                expr->type = expr->call.callee->type->func.return_type;
-                expr->is_lvalue = false;
+                expr->ty = type_int();
                 break;
+            }
 
+            size_t param_count = fn_ty->function.params.count;
+            size_t arg_count = 0;
+            ast_expr_t *last = nullptr;
+
+            for (ast_expr_t **slot = &expr->call.args.head;
+                    *slot; slot = &(*slot)->next) {
+                analyze_expr(*slot);
+
+                if (arg_count < param_count) {
+                    if (type_is_arithmetic((*slot)->ty)) {
+                        type_t *param_ty = *VECTOR_GET(&fn_ty->function.params, type_t *, arg_count);
+                        convert_to_type(slot, param_ty);
+                    } else {
+                        error(&(*slot)->tok, "Invalid argument type");
+                    }
+                }
+
+                last = *slot;
+                arg_count++;
+            }
+            expr->call.args.tail = last;
+
+            if (arg_count != param_count)
+                error(&expr->tok, "Wrong number of arguments");
+
+            expr->ty = fn_ty->function.return_ty;
+            break;
         case EXPR_CAST:
-                analyze_expr(expr->cast.operand);
-                expr->type = expr->cast.target_type;
-                expr->is_lvalue = false;
-                break;
+            analyze_expr(expr->cast.operand);
+            expr->ty = expr->cast.target_ty;
+            expr->is_lvalue = false;
+
+
+            break;
     }
 }
 
-static void require_scalar_expression(struct expr *expr, const char *message) {
-    if (!type_is_scalar(expr->type))
-        error(&expr->tok, message);
-}
+/*
+ * Statement alaysis
+ */
 
-static void require_integer_expression(struct expr *expr, const char *message) {
-    if (!type_is_integer(expr->type))
-        error(&expr->tok, message);
-}
+static void analyze_block(ast_stmt_t *block, bool new_scope);
+static void analyze_declaration_list(ast_stmt_t *stmt);
+static void validate_for_init(ast_stmt_t *init);
 
-static void analyze_stmt(struct stmt *stmt);
-
-static void record_static_initializer(struct decl *d) {
-    if (d->kind != DECL_OBJECT)
-        return;
-
-    if (d->storage_duration != SD_STATIC)
-        return;
-
-    if (!d->object.init)
-        return;
-
-    if (d->object.init->kind != EXPR_INT_CONSTANT &&
-            d->object.init->kind != EXPR_LONG_CONSTANT) {
-        error(&d->name,
-                "Initializer for object with static storage must be constant");
-        return;
-    }
-
-    d->sym->has_static_init = true;
-    d->sym->static_init = d->object.init->constant_value;
-}
-
-static void analyze_object_initializer(struct decl *d)
+static void
+resolve_gotos(void)
 {
-    analyze_expr(d->object.init);
+    for (size_t i = 0; i < sema.fn_ctx.gotos.count; i++) {
+        ast_stmt_t *stmt = *VECTOR_GET(&sema.fn_ctx.gotos, ast_stmt_t *, i);
+        token_t *label = &stmt->goto_stmt.label;
 
-    if (type_is_arithmetic(d->type) &&
-            type_is_arithmetic(d->object.init->type)) {
-        convert_expr_to(&d->object.init, d->type);
-    } else {
-        error(&d->name, "Invalid initializer type");
-    }
+        ast_stmt_t *target = hashmap_get(
+            &sema.fn_ctx.labels,
+            label->start,
+            label->len);
 
-    record_static_initializer(d);
-}
-
-static void analyze_decl_list(struct decl *decls) {
-    if (!decls)
-        return;
-
-    for (struct decl *d = decls; d; d = d->next) {
-        validate_decl(d);
-        bind_declaration_symbol(d);
-
-        if (d->kind == DECL_OBJECT && d->object.init) {
-            analyze_object_initializer(d);
+        if (!target) {
+            error(label, "Use of undeclared label '%.*s'",
+                    (int)label->len, label->start);
         }
+
+        stmt->goto_stmt.target = target;
     }
 }
 
-static void analyze_block(struct block_item *first, bool push_new_scope) {
-    if (!first)
-        return;
-
-    struct scope *old_scope = current_scope;
-    if (push_new_scope)
-        current_scope = scope_push(current_scope);
-
-    for (struct block_item *item = first; item; item = item->next) {
-        if (item->kind == BLOCK_ITEM_DECL) {
-            analyze_decl_list(item->decls);
-        } else {
-            analyze_stmt(item->stmt);
-        }
-    }
-
-    if (push_new_scope) {
-        scope_pop(current_scope);
-        current_scope = old_scope;
-    }
-}
-
-static void analyze_stmt(struct stmt *stmt) {
+static void
+analyze_stmt(ast_stmt_t *stmt)
+{
     if (!stmt)
         return;
 
     switch (stmt->kind) {
         case STMT_NULL:
-        case STMT_BREAK:
-        case STMT_CONTINUE:
-        case STMT_GOTO:
             break;
-
         case STMT_EXPR:
-            analyze_expr(stmt->expr_stmt.expr);
+            analyze_expr(stmt->expr.expr);
             break;
-
-        case STMT_RETURN: {
-            struct type *ret_ty = current_function->type->func.return_type;
-
+        case STMT_DECL:
+            analyze_declaration_list(stmt);
+            break;
+        case STMT_BLOCK:
+            analyze_block(stmt, true);
+            break;
+        case STMT_RETURN:
+            type_t *return_ty = sema.fn_ctx.return_ty;
+            
             if (stmt->return_stmt.expr)
-              analyze_expr(stmt->return_stmt.expr);
+                analyze_expr(stmt->return_stmt.expr);
 
-            if (type_is_void(ret_ty)) {
-              if (stmt->return_stmt.expr)
-                  error(&stmt->tok, "'void' function should not return a value");
+            if (type_is_void(return_ty)) {
+                if (stmt->return_stmt.expr)
+                    error(&stmt->tok,
+                            "Void functions should not return a value");
             } else if (!stmt->return_stmt.expr) {
-              error(&stmt->tok, "Non-void function should return a value");
+                error(&stmt->tok,
+                        "Non-void functions must return a value");
+            } else if (!type_is_arithmetic(stmt->return_stmt.expr->ty)) {
+                error(&stmt->tok,
+                        "Invalid return value type");
             }
             else {
-              // Maybe check if type arithmetic/scalar
-              convert_expr_to(&stmt->return_stmt.expr, ret_ty);
+                convert_to_type(&stmt->return_stmt.expr, return_ty);
             }
             break;
-        }
-
         case STMT_IF:
             analyze_expr(stmt->if_stmt.condition);
-            require_scalar_expression(stmt->if_stmt.condition, "If condition must have scalar type");
             analyze_stmt(stmt->if_stmt.then_stmt);
             analyze_stmt(stmt->if_stmt.else_stmt);
             break;
-
+        case STMT_WHILE:
+        case STMT_DOWHILE:
         case STMT_FOR: {
-            struct scope *old_scope = current_scope;
-            current_scope = scope_push(current_scope);
+            sema.scope = scope_push(sema.scope);
 
-            if (stmt->for_stmt.init) {
-               if (stmt->for_stmt.init->is_decl) {
-                   validate_for_init_decls(stmt->for_stmt.init->decls);
-                   analyze_decl_list(stmt->for_stmt.init->decls);
-               } else {
-                   analyze_expr(stmt->for_stmt.init->expr);
-               }
-            }
+            validate_for_init(stmt->loop.init);
+            analyze_stmt(stmt->loop.init);
+            analyze_expr(stmt->loop.condition);
+            analyze_expr(stmt->loop.post);
 
-            if (stmt->for_stmt.condition) {
-               analyze_expr(stmt->for_stmt.condition);
-               require_scalar_expression(stmt->for_stmt.condition,
-                       "For condition must have scalar type");
-            }
+            ast_stmt_t *saved_breakable = sema.fn_ctx.breakable;
+            ast_stmt_t *saved_loop = sema.fn_ctx.loop;
+            sema.fn_ctx.breakable = stmt;
+            sema.fn_ctx.loop = stmt;
 
-            if (stmt->for_stmt.post)
-               analyze_expr(stmt->for_stmt.post);
+            analyze_stmt(stmt->loop.body);
 
-            analyze_stmt(stmt->for_stmt.body);
-
-            scope_pop(current_scope);
-            current_scope = old_scope;
+            sema.fn_ctx.breakable = saved_breakable;
+            sema.fn_ctx.loop = saved_loop;
+            
+            sema.scope = scope_pop(sema.scope);
             break;
         }
-
-        case STMT_WHILE:
-            analyze_expr(stmt->while_stmt.condition);
-            require_scalar_expression(stmt->while_stmt.condition,
-                   "While condition must have scalar type");
-            analyze_stmt(stmt->while_stmt.body);
-            break;
-
-        case STMT_DOWHILE:
-            analyze_stmt(stmt->dowhile_stmt.body);
-            analyze_expr(stmt->dowhile_stmt.condition);
-            require_scalar_expression(stmt->dowhile_stmt.condition,
-                   "Do-while condition must have scalar type");
-            break;
-
-        case STMT_SWITCH:
-            analyze_expr(stmt->switch_stmt.condition);
-            require_integer_expression(stmt->switch_stmt.condition,
-                    "Switch condition must have type int");
-            analyze_stmt(stmt->switch_stmt.body);
-            break;
-
-        case STMT_CASE:
-            analyze_expr(stmt->case_stmt.value);
-            require_integer_expression(stmt->case_stmt.value,
-                    "Case value must have type int");
-            analyze_block(stmt->case_stmt.items, false);
-            break;
-
-        case STMT_DEFAULT:
-            analyze_block(stmt->default_stmt.items, false);
-            break;
-
-        case STMT_BLOCK:
-            analyze_block(stmt->block.items, true);
-            break;
-
-        case STMT_LABEL:
-            analyze_stmt(stmt->label_stmt.stmt);
-            break;
-    }
-}
-
-static void collect_labels_stmt(struct stmt *stmt);
-static void collect_labels_items(struct block_item *item) {
-    for (struct block_item *i = item; i; i = i->next)
-        if (i->kind == BLOCK_ITEM_STMT)
-            collect_labels_stmt(i->stmt);
-}
-
-static void collect_labels_stmt(struct stmt *stmt) {
-    if (!stmt)
-        return;
-
-    switch (stmt->kind) {
-        case STMT_LABEL: {
-            struct token *tok = &stmt->label_stmt.name;
-
-            if (hashmap_get(&labels, tok->start, tok->length))
-             error(tok, "Duplicate label definition");
-            else
-             hashmap_set(&labels, tok->start, tok->length, stmt);
-
-            collect_labels_stmt(stmt->label_stmt.stmt);
-            break;
-        }
-
-        case STMT_IF:
-            collect_labels_stmt(stmt->if_stmt.then_stmt);
-            collect_labels_stmt(stmt->if_stmt.else_stmt);
-            break;
-
-        case STMT_FOR:
-            collect_labels_stmt(stmt->for_stmt.body);
-            break;
-
-        case STMT_WHILE:
-            collect_labels_stmt(stmt->while_stmt.body);
-            break;
-
-        case STMT_DOWHILE:
-            collect_labels_stmt(stmt->dowhile_stmt.body);
-            break;
-
-        case STMT_SWITCH:
-            collect_labels_stmt(stmt->switch_stmt.body);
-            break;
-
-        case STMT_CASE:
-            collect_labels_items(stmt->case_stmt.items);
-            break;
-
-        case STMT_DEFAULT:
-            collect_labels_items(stmt->default_stmt.items);
-            break;
-
-        case STMT_BLOCK:
-            collect_labels_items(stmt->block.items);
-            break;
-
-        default:
-            break;
-    }
-}
-
-static void check_gotos_stmt(struct stmt *stmt);
-static void check_gotos_items(struct block_item *item) {
-    for (struct block_item *i = item; i; i = i->next)
-        if (i->kind == BLOCK_ITEM_STMT)
-            check_gotos_stmt(i->stmt);
-}
-
-static void check_gotos_stmt(struct stmt *stmt) {
-    if (!stmt)
-        return;
-
-    switch (stmt->kind) {
-        case STMT_GOTO: {
-            struct token *tok = &stmt->goto_stmt.label;
-
-            if (!hashmap_get(&labels, tok->start, tok->length))
-                error(tok, "Use of undeclared label");
-
-            break;
-        }
-
-        case STMT_LABEL:
-            check_gotos_stmt(stmt->label_stmt.stmt);
-            break;
-
-        case STMT_IF:
-            check_gotos_stmt(stmt->if_stmt.then_stmt);
-            check_gotos_stmt(stmt->if_stmt.else_stmt);
-            break;
-
-        case STMT_FOR:
-            check_gotos_stmt(stmt->for_stmt.body);
-            break;
-
-        case STMT_WHILE:
-            check_gotos_stmt(stmt->while_stmt.body);
-            break;
-
-        case STMT_DOWHILE:
-            check_gotos_stmt(stmt->dowhile_stmt.body);
-            break;
-
-        case STMT_SWITCH:
-            check_gotos_stmt(stmt->switch_stmt.body);
-            break;
-
-        case STMT_CASE:
-            check_gotos_items(stmt->case_stmt.items);
-            break;
-
-        case STMT_DEFAULT:
-            check_gotos_items(stmt->default_stmt.items);
-            break;
-
-        case STMT_BLOCK:
-            check_gotos_items(stmt->block.items);
-            break;
-
-        default:
-            break;
-    }
-}
-
-static void resolve_break_continue_stmt(struct stmt *stmt,
-        struct loop_switch_ctx *ctx);
-static void resolve_break_continue_items(struct block_item *item,
-        struct loop_switch_ctx *ctx) {
-    for (struct block_item *i = item; i; i = i->next)
-        if (i->kind == BLOCK_ITEM_STMT)
-            resolve_break_continue_stmt(i->stmt, ctx);
-}
-
-static void resolve_break_continue_stmt(struct stmt *stmt,
-        struct loop_switch_ctx *ctx) {
-    if (!stmt)
-        return;
-
-    switch (stmt->kind) {
-        case STMT_FOR: {
-            char *b_label = make_unique("b.for", 5);
-            char *c_label = make_unique("c.for", 5);
-            stmt->for_stmt.break_label = b_label;
-            stmt->for_stmt.continue_label = c_label;
-
-            struct loop_switch_ctx new_ctx = {.break_label = b_label,
-               .continue_label = c_label};
-            resolve_break_continue_stmt(stmt->for_stmt.body, &new_ctx);
-            break;
-        }
-
-        case STMT_WHILE: {
-            char *b_label = make_unique("b.while", 7);
-            char *c_label = make_unique("c.while", 7);
-            stmt->while_stmt.break_label = b_label;
-            stmt->while_stmt.continue_label = c_label;
-
-            struct loop_switch_ctx new_ctx = {.break_label = b_label,
-             .continue_label = c_label};
-            resolve_break_continue_stmt(stmt->while_stmt.body, &new_ctx);
-            break;
-         }
-
-        case STMT_DOWHILE: {
-            char *b_label = make_unique("b.dowhile", 9);
-            char *c_label = make_unique("c.dowhile", 9);
-            stmt->dowhile_stmt.break_label = b_label;
-            stmt->dowhile_stmt.continue_label = c_label;
-
-            struct loop_switch_ctx new_ctx = {.break_label = b_label,
-            .continue_label = c_label};
-            resolve_break_continue_stmt(stmt->dowhile_stmt.body, &new_ctx);
-            break;
-       }
-
         case STMT_SWITCH: {
-            char *b_label = make_unique("b.switch", 8);
-            stmt->switch_stmt.break_label = b_label;
+            analyze_expr(stmt->switch_stmt.condition);
 
-            struct loop_switch_ctx new_ctx = {.break_label = b_label,
-              .continue_label =
-                  ctx ? ctx->continue_label : NULL};
-            resolve_break_continue_stmt(stmt->switch_stmt.body, &new_ctx);
-            break;
-        }
-
-        case STMT_BREAK:
-            if (!ctx || !ctx->break_label)
-              error(&stmt->tok, "'break' statement outside of loop or switch");
-            else
-              stmt->break_stmt.target_label = ctx->break_label;
-            break;
-
-        case STMT_CONTINUE:
-            if (!ctx || !ctx->continue_label)
-              error(&stmt->tok, "'continue' statement outside of loop");
-            else
-              stmt->continue_stmt.target_label = ctx->continue_label;
-            break;
-
-        case STMT_IF:
-            resolve_break_continue_stmt(stmt->if_stmt.then_stmt, ctx);
-            resolve_break_continue_stmt(stmt->if_stmt.else_stmt, ctx);
-            break;
-
-        case STMT_LABEL:
-            resolve_break_continue_stmt(stmt->label_stmt.stmt, ctx);
-            break;
-
-        case STMT_CASE:
-            resolve_break_continue_items(stmt->case_stmt.items, ctx);
-            break;
-
-        case STMT_DEFAULT:
-            resolve_break_continue_items(stmt->default_stmt.items, ctx);
-            break;
-
-        case STMT_BLOCK:
-            resolve_break_continue_items(stmt->block.items, ctx);
-            break;
-
-        default:
-            break;
-    }
-}
-
-static void check_case_placement_stmt(struct stmt *stmt, int switch_depth);
-static void check_case_placement_items(struct block_item *item,
-        int switch_depth) {
-    for (struct block_item *i = item; i; i = i->next)
-        if (i->kind == BLOCK_ITEM_STMT)
-            check_case_placement_stmt(i->stmt, switch_depth);
-}
-
-static void check_case_placement_stmt(struct stmt *stmt, int switch_depth) {
-    if (!stmt)
-        return;
-
-    switch (stmt->kind) {
-        case STMT_CASE:
-            if (switch_depth == 0)
-                error(&stmt->tok, "'case' label outside of switch");
-
-            check_case_placement_items(stmt->case_stmt.items, switch_depth);
-            break;
-
-        case STMT_DEFAULT:
-            if (switch_depth == 0)
-                error(&stmt->tok, "'default' label outside of switch");
-
-            check_case_placement_items(stmt->default_stmt.items, switch_depth);
-            break;
-
-        case STMT_SWITCH:
-            check_case_placement_stmt(stmt->switch_stmt.body, switch_depth + 1);
-            break;
-
-        case STMT_IF:
-            check_case_placement_stmt(stmt->if_stmt.then_stmt, switch_depth);
-            check_case_placement_stmt(stmt->if_stmt.else_stmt, switch_depth);
-            break;
-
-        case STMT_BLOCK:
-            check_case_placement_items(stmt->block.items, switch_depth);
-            break;
-
-        case STMT_FOR:
-            check_case_placement_stmt(stmt->for_stmt.body, switch_depth);
-            break;
-
-        case STMT_WHILE:
-            check_case_placement_stmt(stmt->while_stmt.body, switch_depth);
-            break;
-
-        case STMT_DOWHILE:
-            check_case_placement_stmt(stmt->dowhile_stmt.body, switch_depth);
-            break;
-
-        case STMT_LABEL:
-            check_case_placement_stmt(stmt->label_stmt.stmt, switch_depth);
-            break;
-
-        default:
-            break;
-    }
-}
-
-static void resolve_cases_stmt(struct stmt *stmt,
-        struct switch_annotation *ann);
-static void resolve_cases_items(struct block_item *item,
-        struct switch_annotation *ann) {
-    for (struct block_item *i = item; i; i = i->next)
-        if (i->kind == BLOCK_ITEM_STMT)
-            resolve_cases_stmt(i->stmt, ann);
-}
-
-static void append_case_entry(struct switch_annotation *ann,
-        struct stmt *node) {
-    struct case_entry *entry = calloc(1, sizeof(struct case_entry));
-    entry->node = node;
-
-    struct case_entry **tail = &ann->cases;
-
-    while (*tail)
-        tail = &(*tail)->next;
-
-    *tail = entry;
-}
-
-static void resolve_cases_stmt(struct stmt *stmt,
-        struct switch_annotation *ann) {
-    if (!stmt)
-        return;
-
-    switch (stmt->kind) {
-        case STMT_CASE: {
-            /*
-            * TODO: This should calculate the constant from case value expr
-            */
-            if (stmt->case_stmt.value->kind != EXPR_INT_CONSTANT &&
-                    stmt->case_stmt.value->kind != EXPR_LONG_CONSTANT) {
-                error(&stmt->tok, "'case' must be an integer constant");
-                return;
+            if (!type_is_integer(stmt->switch_stmt.condition->ty)) {
+                error(&stmt->tok, "Switch condition must be integer");
+                stmt->switch_stmt.condition->ty = type_int();
             }
 
-            int64_t value = stmt->case_stmt.value->constant_value;
+            ast_stmt_t *saved_sw = sema.fn_ctx.sw;
+            ast_stmt_t *saved_breakable = sema.fn_ctx.breakable;
+            ast_stmt_t *saved_last_case = sema.fn_ctx.last_case;
+            sema.fn_ctx.breakable = stmt;
+            sema.fn_ctx.sw = stmt;
+            sema.fn_ctx.last_case = nullptr;
 
-            for (struct case_entry *e = ann->cases; e; e = e->next) {
-                if (e->node->kind != STMT_CASE)
-                    continue;
+            analyze_stmt(stmt->switch_stmt.body);
 
-                if (e->node->case_stmt.value->constant_value == value) {
-                    error(&stmt->tok, "Duplicate case value in switch");
-                    return;
+            sema.fn_ctx.breakable = saved_breakable;
+            sema.fn_ctx.last_case = saved_last_case;
+            sema.fn_ctx.sw = saved_sw;
+            break;
+        }
+        case STMT_CASE:
+            ast_stmt_t *sw = sema.fn_ctx.sw;
+
+            analyze_expr(stmt->case_stmt.expr);
+
+            if (!sw) {
+                error(&stmt->tok, "'case' label used outside of 'switch'");
+            } else if (!type_is_integer(stmt->case_stmt.expr->ty)) {
+                error(&stmt->tok, "Case value must be integer");
+            } else {
+                convert_to_type(&stmt->case_stmt.expr,
+                        sw->switch_stmt.condition->ty);
+
+                int64_t value;
+                if (!eval_constant(stmt->case_stmt.expr, &value)) {
+                    error(&stmt->tok, "Case value must be constan");
+                } else {
+                    bool duplicate = false;
+                    for (ast_stmt_t *c = sw->switch_stmt.cases;
+                            c; c = c->case_stmt.next_case) {
+                        if (c->case_stmt.value == value)
+                            duplicate = true;
+                    }
+
+                    if (duplicate) {
+                        error(&stmt->tok, "Duplicate case value");
+                    } else {
+                        stmt->case_stmt.value = value;
+
+                        if (sema.fn_ctx.last_case)
+                            sema.fn_ctx.last_case->case_stmt.next_case = stmt;
+                        else
+                            sw->switch_stmt.cases = stmt;
+
+                        sema.fn_ctx.last_case = stmt;
+                    }
                 }
             }
-
-            stmt->case_stmt.label = make_unique("case", 4);
-            append_case_entry(ann, stmt);
-
-            resolve_cases_items(stmt->case_stmt.items, ann);
+            
+            analyze_stmt(stmt->case_stmt.stmt);
             break;
-        }
+        case STMT_DEFAULT:
+            if (!sema.fn_ctx.sw)
+                error(&stmt->tok, "'default' label used outside of 'switch'");
+            else if (sema.fn_ctx.sw->switch_stmt.default_case) {
+                error(&stmt->tok, "Duplicate 'default' label");
+            }
+            else 
+                sema.fn_ctx.sw->switch_stmt.default_case = stmt;
 
-        case STMT_DEFAULT: {
-            if (ann->default_node) {
-               error(&stmt->tok, "Duplicate default labels in switch");
-               return;
+            analyze_stmt(stmt->default_stmt.stmt);
+            break;
+        case STMT_BREAK:
+            if (!sema.fn_ctx.breakable)
+                error(&stmt->tok, "'break' statement outside of loop or switch");
+            else
+                stmt->break_stmt.target = sema.fn_ctx.breakable;
+            break;
+        case STMT_CONTINUE:
+            if (!sema.fn_ctx.loop)
+                error(&stmt->tok, "'continue' statement outside of loop");
+            else
+                stmt->continue_stmt.target = sema.fn_ctx.loop;
+            break;
+        case STMT_LABEL:
+            token_t *tok = &stmt->label_stmt.label;
+
+            if (hashmap_get(
+                        &sema.fn_ctx.labels,
+                        tok->start,
+                        tok->len)) {
+                error(&stmt->tok, "Duplicate label definition");
+            } else {
+                hashmap_set(
+                        &sema.fn_ctx.labels,
+                        tok->start,
+                        tok->len,
+                        stmt);
             }
 
-            stmt->default_stmt.label = make_unique("default", 7);
-            ann->default_node = stmt;
-            append_case_entry(ann, stmt);
-
-            resolve_cases_items(stmt->default_stmt.items, ann);
+            analyze_stmt(stmt->label_stmt.stmt);
             break;
-        }
-
-        case STMT_SWITCH:
-            /*
-            * Nested switch owns its own cases.
-            */
-            break;
-
-        case STMT_IF:
-            resolve_cases_stmt(stmt->if_stmt.then_stmt, ann);
-            resolve_cases_stmt(stmt->if_stmt.else_stmt, ann);
-            break;
-
-        case STMT_FOR:
-            resolve_cases_stmt(stmt->for_stmt.body, ann);
-            break;
-
-        case STMT_WHILE:
-            resolve_cases_stmt(stmt->while_stmt.body, ann);
-            break;
-
-        case STMT_DOWHILE:
-            resolve_cases_stmt(stmt->dowhile_stmt.body, ann);
-            break;
-
-        case STMT_LABEL:
-            resolve_cases_stmt(stmt->label_stmt.stmt, ann);
-            break;
-
-        case STMT_BLOCK:
-            resolve_cases_items(stmt->block.items, ann);
-            break;
-
-        default:
+        case STMT_GOTO:
+            vector_push(&sema.fn_ctx.gotos, &stmt);
             break;
     }
 }
 
-static void resolve_switches_stmt(struct stmt *stmt);
-static void resolve_switches_items(struct block_item *item) {
-    for (struct block_item *i = item; i; i = i->next)
-        if (i->kind == BLOCK_ITEM_STMT)
-            resolve_switches_stmt(i->stmt);
+static void
+analyze_block(ast_stmt_t *block, bool new_scope)
+{
+    if (new_scope)
+        sema.scope = scope_push(sema.scope);
+
+    LIST_FOREACH(stmt, &block->block.items)
+        analyze_stmt(stmt);
+
+    if (new_scope)
+        sema.scope = scope_pop(sema.scope);
 }
 
-static void resolve_switches_stmt(struct stmt *stmt) {
-    if (!stmt)
-        return;
+/*
+ * Declaration analysis
+ */
 
-    switch (stmt->kind) {
-        case STMT_SWITCH: {
-            struct switch_annotation *ann = calloc(1, sizeof(*ann));
+static void
+validate_function_params(ast_decl_t *decl)
+{
+    hashmap names;
+    hashmap_init(&names);
 
-            resolve_cases_stmt(stmt->switch_stmt.body, ann);
-
-            stmt->switch_stmt.annotation = ann;
-
-            // Nested switches
-            resolve_switches_stmt(stmt->switch_stmt.body);
-            break;
-        }
-
-        case STMT_IF:
-            resolve_switches_stmt(stmt->if_stmt.then_stmt);
-            resolve_switches_stmt(stmt->if_stmt.else_stmt);
-            break;
-
-        case STMT_BLOCK:
-            resolve_switches_items(stmt->block.items);
-            break;
-
-        case STMT_FOR:
-            resolve_switches_stmt(stmt->for_stmt.body);
-            break;
-
-        case STMT_WHILE:
-            resolve_switches_stmt(stmt->while_stmt.body);
-            break;
-
-        case STMT_DOWHILE:
-            resolve_switches_stmt(stmt->dowhile_stmt.body);
-            break;
-
-        case STMT_CASE:
-            resolve_switches_items(stmt->case_stmt.items);
-            break;
-
-        case STMT_DEFAULT:
-            resolve_switches_items(stmt->default_stmt.items);
-            break;
-
-        case STMT_LABEL:
-            resolve_switches_stmt(stmt->label_stmt.stmt);
-            break;
-
-        default:
-            break;
-    }
-}
-
-static void analyze_function_body(struct decl *fn) {
-    if (!fn->func.body)
-        return;
-
-    hashmap_init(&labels);
-
-    collect_labels_stmt(fn->func.body);
-
-    struct scope *old_scope = current_scope;
-    struct decl *old_function = current_function;
-
-    current_scope = scope_push(old_scope);
-    current_function = fn;
-
-    for (struct decl *p = fn->func.params; p; p = p->next) {
-        if (!p->name.start) {
-            error(&fn->name, "Function definition parameter needs a name");
+    LIST_FOREACH(param, &decl->function.params) {
+        if (param->kind != DECL_OBJECT) {
+            error(&param->name, "Parameters must be object type");
             continue;
         }
 
-        validate_decl(p);
-        bind_declaration_symbol(p);
-    }
+        if (type_is_void(param->ty))
+            error(&param->name, "Parameter can't have type 'void'");
 
-    analyze_block(fn->func.body->block.items, false);
-
-    check_gotos_stmt(fn->func.body);
-    check_case_placement_stmt(fn->func.body, 0);
-    resolve_break_continue_stmt(fn->func.body, NULL);
-    resolve_switches_stmt(fn->func.body);
-
-    scope_pop(current_scope);
-    current_scope = old_scope;
-    current_function = old_function;
-
-    hashmap_free(&labels);
-}
-
-struct ast_program *sema_analysis(struct ast_program *program) {
-    unique_counter = 0;
-    had_error = false;
-
-    all_symbols = NULL;
-    all_symbols_tail = NULL;
-
-    hashmap_init(&internal_symbols);
-    hashmap_init(&external_symbols);
-
-    global_scope = scope_push(NULL);
-    current_scope = global_scope;
-    current_function = NULL;
-
-    /*
-     * This loop enforces C11 order-based visibility
-     */
-    for (struct decl *d = program->decls; d; d = d->next) {
-        validate_decl(d);
-        bind_declaration_symbol(d);
-
-        if (d->kind == DECL_OBJECT && d->object.init) {
-            analyze_object_initializer(d);
+        if (param->sc != STORAGE_CLASS_NONE &&
+                param->sc != STORAGE_CLASS_REGISTER) {
+            error(&param->name, "Only 'register' storage class can be used as parameter");
         }
 
-        if (d->kind == DECL_FUNCTION && d->func.body)
-            analyze_function_body(d);
+        if (param->name.len > 0) {
+            if (hashmap_get(&names, param->name.start, param->name.len)) {
+                    error(&param->name, "Duplicate parameter name '%.*s'", (int)param->name.len, param->name.start);
+            }
+
+            hashmap_set(&names, param->name.start, param->name.len, param);
+        }
     }
 
-    hashmap_free(&internal_symbols);
-    hashmap_free(&external_symbols);
+    hashmap_free(&names);
+}
 
-    return had_error ? NULL : program;
+static void
+validate_declaration(ast_decl_t *decl)
+{
+    if (is_global_scope() &&
+            (decl->sc == STORAGE_CLASS_AUTO ||
+             decl->sc == STORAGE_CLASS_REGISTER)) {
+        error(&decl->name, "Illegal storage class at file scope");
+    }
+
+    /* Validate function */
+    if (decl->kind == DECL_FUNCTION) {
+        validate_function_params(decl);
+
+        if (!is_global_scope() &&
+                decl->sc != STORAGE_CLASS_NONE &&
+                decl->sc != STORAGE_CLASS_EXTERN) {
+            error(&decl->name,
+                    "Block-scope function declaration may only use 'extern'");
+        }
+
+        if (decl->function.body &&
+                decl->sc != STORAGE_CLASS_NONE &&
+                decl->sc != STORAGE_CLASS_EXTERN &&
+                decl->sc != STORAGE_CLASS_STATIC) {
+            error(&decl->name,
+                    "Function definition may only use 'extern' or 'static'");
+        }
+
+        return;
+    }
+
+    /* Validate object */
+    if (type_is_void(decl->ty))
+        error(&decl->name, "Objects cannot have type 'void'");
+
+    if (!is_global_scope() &&
+            decl->sc == STORAGE_CLASS_EXTERN && decl->object.init) {
+        error(&decl->name, "Block-scope extern object cannot have an initializer");
+    }
+}
+
+static void
+validate_for_init(ast_stmt_t *init)
+{
+    if (!init || init->kind != STMT_DECL)
+        return;
+
+    LIST_FOREACH(decl, &init->decl.decls) {
+        if (decl->kind != DECL_OBJECT) {
+            error(&decl->name, "For-initializer must declare an object");
+        }
+
+        if (decl->sc != STORAGE_CLASS_NONE &&
+                decl->sc != STORAGE_CLASS_AUTO &&
+                decl->sc != STORAGE_CLASS_REGISTER) {
+            error(&decl->name, "Illegal storage-cllass for for-initializer");
+        }
+    }
+}
+
+static linkage
+inherited_linkage(symbol_t *prior_visible)
+{
+    if (prior_visible && prior_visible->linkage != LINKAGE_NONE)
+        return prior_visible->linkage;
+
+    return LINKAGE_EXTERNAL;
+}
+
+static linkage
+determine_linkage(ast_decl_t *decl, symbol_t *prior_visible)
+{
+    // Parameters have no linkage
+    if (decl->is_parameter)
+        return LINKAGE_NONE;
+
+    // Functions: 'static' is internal, everything else 'extern'
+    if (decl->kind == DECL_FUNCTION) {
+        if (decl->sc == STORAGE_CLASS_STATIC)
+            return LINKAGE_INTERNAL;
+
+        return inherited_linkage(prior_visible);
+    }
+
+    // Block-scope
+    if (decl->sc == STORAGE_CLASS_EXTERN)
+        return inherited_linkage(prior_visible);
+
+    if (is_global_scope()) {
+        if (decl->sc == STORAGE_CLASS_STATIC)
+            return LINKAGE_INTERNAL;
+
+        if (decl->sc == STORAGE_CLASS_NONE)
+            return LINKAGE_EXTERNAL;
+    }
+
+    // Block-scope objects at file-scope (already reported errors)
+    return LINKAGE_NONE;
+}
+
+static storage_duration
+determine_storage_duration(ast_decl_t *decl)
+{
+    if (decl->kind == DECL_FUNCTION)
+        return STORAGE_DURATION_STATIC;
+
+    if (is_global_scope())
+        return STORAGE_DURATION_STATIC;
+
+    if (decl->sc == STORAGE_CLASS_STATIC ||
+            decl->sc == STORAGE_CLASS_EXTERN)
+        return STORAGE_DURATION_STATIC;
+
+    return STORAGE_DURATION_AUTO;
+}
+
+static void
+classify_definition(ast_decl_t *decl)
+{
+    decl->is_definition = false;
+    decl->is_tentative = false;
+
+    // int f() {} vs int f();
+    if (decl->kind == DECL_FUNCTION) {
+        decl->is_definition = decl->function.body != nullptr;
+        return;
+    }
+
+    // Initializer always makes a definition
+    if (decl->object.init) {
+        decl->is_definition = true;
+        return;
+    }
+
+    if (decl->sc == STORAGE_CLASS_EXTERN)
+        return;
+
+    if (decl->sd == STORAGE_DURATION_STATIC) {
+        decl->is_tentative = true;
+        return;
+    }
+
+    // Automatic objects and parameters
+    decl->is_definition = true;
+}
+
+static void
+merge_redeclaration(
+        ast_decl_t *decl,
+        symbol_t *sym,
+        bool install)
+{
+    const char *name = decl->name.start;
+    int len = (int)decl->name.len;
+
+    if (decl->link != sym->linkage)
+        error(&decl->name, "Conflicting linkage for '%.*s'", len, name);
+
+    // Also catches a function redeclared as an object and the reverse
+    if (!type_compatible(decl->ty, sym->ty))
+        error(&decl->name, "Conflicting types for '%.*s'", len, name);
+
+    if (decl->kind == DECL_FUNCTION && decl->is_definition) {
+        if (sym->defined)
+            error(&decl->name, "Redefinition of '%.*s'", len, name);
+
+        // The backend wants the declaration that has the body
+        sym->defined = true;
+        sym->decl = decl;
+    }
+
+    if (decl->is_tentative && sym->init == INIT_NONE)
+        sym->init = INIT_TENTATIVE;
+
+    decl->sym = sym;
+
+    if (install) {
+        hashmap_set(
+            &sema.scope->ordinary,
+            decl->name.start,
+            decl->name.len,
+            sym);
+    }
+}
+
+static void
+bind_declaration_symbol(ast_decl_t *decl)
+{
+    const char *name = decl->name.start;
+    const size_t len = decl->name.len;
+    symbol_t *prior_visible = scope_lookup(sema.scope, name, len);
+
+    decl->link = determine_linkage(decl, prior_visible);
+    decl->sd = determine_storage_duration(decl);
+    classify_definition(decl);
+
+    // Same scope: only declarations with linkage may be repeated
+    symbol_t *prior_current = scope_lookup_current(sema.scope, name, len);
+    if (prior_current) {
+        if (decl->link == LINKAGE_NONE ||
+                prior_current->linkage == LINKAGE_NONE) {
+            error(&decl->name,
+                    "Redeclaration of '%.*s'", len, name);
+            decl->sym = prior_current;
+            return;
+        }
+
+        merge_redeclaration(decl, prior_current, false);
+        return;
+    }
+
+    if (decl->link != LINKAGE_NONE) {
+        symbol_t *prior_linked = hashmap_get(&sema.linked_symbols, name, len);
+
+        if (prior_linked) {
+            merge_redeclaration(decl, prior_linked, true);
+            return;
+        }
+    }
+
+    symbol_t *sym = symbol_new(decl);
+    hashmap_set(&sema.scope->ordinary, name, len, sym);
+
+    if (decl->link != LINKAGE_NONE)
+        hashmap_set(&sema.linked_symbols, name, len, sym);
+
+    decl->sym = sym;
+}
+
+static void
+analyze_object_initializer(ast_decl_t *decl)
+{
+    analyze_expr(decl->object.init);
+
+    if (!type_is_arithmetic(decl->object.init->ty)) {
+        error(&decl->name, "Invalid initializer type");
+        return;
+    }
+
+    // Skip void
+    if (!type_is_arithmetic(decl->ty))
+        return;
+
+    convert_to_type(&decl->object.init, decl->ty);
+
+    if (decl->sd != STORAGE_DURATION_STATIC)
+        return;
+
+    int64_t value;
+    if (!eval_constant(decl->object.init, &value)) {
+        error(&decl->object.init->tok,
+                "Initializer with static storage must be a constant");
+        return;
+    }
+
+    if (decl->sym->init == INIT_CONSTANT) {
+        error(&decl->name, "Redeclaration of '%.*s'", decl->name.len, decl->name.start);
+        return;
+    }
+
+    decl->sym->init = INIT_CONSTANT;
+    decl->sym->init_value = value;
+}
+
+static void
+analyze_function(ast_decl_t *fn)
+{
+    sema.fn_ctx = (function_ctx_t){
+        .decl = fn,
+        .return_ty = fn->ty->function.return_ty
+    };
+    hashmap_init(&sema.fn_ctx.labels);
+    VECTOR_INIT(&sema.fn_ctx.gotos, ast_stmt_t *);
+
+    // Parameters share scope with function body
+    sema.scope = scope_push(sema.scope);
+
+    LIST_FOREACH(param, &fn->function.params) {
+        if (param->name.len == 0) {
+            error(&param->name, "Parameter name omitted in function declaration");
+            continue;
+        }
+
+        bind_declaration_symbol(param);
+    }
+
+    analyze_block(fn->function.body, false);
+    resolve_gotos();
+
+    sema.scope = scope_pop(sema.scope);
+
+    vector_free(&sema.fn_ctx.gotos);
+    hashmap_free(&sema.fn_ctx.labels);
+}
+
+static void
+analyze_declaration(ast_decl_t *decl)
+{
+    validate_declaration(decl);
+    bind_declaration_symbol(decl);
+
+    if (decl->kind == DECL_FUNCTION && decl->function.body)
+        analyze_function(decl);
+
+    if (decl->kind == DECL_OBJECT && decl->object.init)
+        analyze_object_initializer(decl);
+}
+
+static void
+analyze_declaration_list(ast_stmt_t *stmt)
+{
+    LIST_FOREACH(decl, &stmt->decl.decls)
+        analyze_declaration(decl);
+}
+
+static void
+finish_tentative_declarations(void)
+{
+    LIST_FOREACH(sym, &sema.result->symbols) {
+        if (sym->init == INIT_TENTATIVE) {
+            sym->init = INIT_CONSTANT;
+            sym->init_value = 0;
+        }
+    }
+}
+
+bool
+sema_analyze(
+    sema_result_t *result,
+    ast_program_t *program)
+{
+    *result = (sema_result_t){
+        .program = program
+    };
+
+    sema = (sema_t){
+        .result = result
+    };
+    hashmap_init(&sema.linked_symbols);
+    sema.scope = scope_push(nullptr); // global/file scope
+
+    LIST_FOREACH(decl, &program->decls)
+        analyze_declaration(decl);
+
+    finish_tentative_declarations();
+
+    result->symbol_count = sema.next_symbol_id;
+
+    sema.scope = scope_pop(sema.scope);
+    hashmap_free(&sema.linked_symbols);
+
+    return !diagnostics_had_error();
 }

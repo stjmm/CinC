@@ -1,26 +1,21 @@
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <limits.h>
-
 #include "parser.h"
 #include "ast.h"
+#include "diagnostics.h"
 #include "lexer.h"
 #include "type.h"
+#include "base/vector.h"
 
-struct parser {
-    struct token previous;
-    struct token current;
-    bool had_error;
-    bool panic_mode;
-};
+#include <stdlib.h>
+#include <errno.h>
+#include <stdarg.h>
 
-typedef struct expr *(*prefix_parse_fn)(void);
-typedef struct expr *(*infix_parse_fn)(struct expr *);
+typedef struct {
+    token_t current;
+    token_t previous;
+    bool panic;
+} parser_t;
 
-enum precedence {
+typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT,    // = +=
     PREC_TERNARY,       // ?:
@@ -37,120 +32,150 @@ enum precedence {
     PREC_UNARY,         // ++x ! -
     PREC_POSTFIX,       // () [] x++
     PREC_PRIMARY,
-};
+} precedence_kind;
 
-struct parse_rule {
+typedef ast_expr_t *(*prefix_parse_fn)(void);
+typedef ast_expr_t *(*infix_parse_fn)(ast_expr_t *left);
+
+typedef struct {
     prefix_parse_fn prefix;
     infix_parse_fn infix;
-    enum precedence prec;
-};
+    precedence_kind prec;
+} parse_rule_t;
 
-struct decl_specs {
-    struct type *base_type;
-    enum storage_class storage_class;
-    struct token type_tok;
-    struct token storage_tok;
-};
+typedef struct {
+    type_t *ty;
+    storage_class sc;
+    token_t tok;
+} decl_specs_t;
 
-static struct parser parser_state;
+static parser_t parser;
 
-static void error(struct token *tok, const char *message)
+static void
+error(const token_t *tok, const char *fmt, ...)
 {
-    if (parser_state.panic_mode)
+    if (parser.panic)
         return;
 
-    parser_state.panic_mode = true;
+    parser.panic = true;
 
-    int col = (int)(tok->start - tok->line_start);
-
-    fprintf(stderr, "%s: Error at line %d, col %d: %s\n", tok->filename, tok->line, col, message);
-
-    const char *line_end = tok->line_start;
-    while (*line_end != '\0' && *line_end != '\n')
-        line_end++;
-    fprintf(stderr, "  %.*s\n", (int)(line_end - tok->line_start), tok->line_start);
-
-    fprintf(stderr, "  %*s", col, "");
-    for (int i = 0; i < (tok->length > 0 ? tok->length : 1); i++)
-        fputc('^', stderr);
-    fputc('\n', stderr);
-
-    parser_state.had_error = true;
+    va_list args;
+    va_start(args, fmt);
+    diagnostics_error(tok, fmt, args);
+    va_end(args);
 }
 
-static void advance(void)
+static void
+advance(void)
 {
-    parser_state.previous = parser_state.current;
+    parser.previous = parser.current;
 
     for (;;) {
-        parser_state.current = lexer_next_token();
+        parser.current = lexer_next_token();
 
-        if (parser_state.current.type != TOKEN_ERROR)
+        if (parser.current.kind != TOKEN_ERROR)
             break;
 
-        error(&parser_state.current, "Unexpected character");
+        error(&parser.current, "Unexpected character");
     }
 }
 
-static bool check(enum token_type type)
+static bool
+check(token_kind kind)
 {
-    return parser_state.current.type == type;
+    return parser.current.kind == kind;
 }
 
-static bool match(enum token_type type)
+static bool
+match(token_kind kind)
 {
-    if (!check(type))
+    if (!check(kind))
         return false;
 
     advance();
     return true;
 }
 
-static void consume(enum token_type type, const char *message)
+static void
+consume(token_kind kind, const char *message)
 {
-    if (check(type)) {
+    if (check(kind)) {
         advance();
         return;
     }
 
-    error(&parser_state.current, message);
+    error(&parser.current, message);
 }
 
-static bool is_type_specifier(enum token_type type)
+static bool
+is_type_specifier(token_kind kind)
 {
-    return type == TOKEN_INT ||
-           type == TOKEN_LONG ||
-           type == TOKEN_VOID;
+    return kind == TOKEN_INT ||
+        kind == TOKEN_LONG ||
+        kind == TOKEN_VOID;
 }
 
-static bool is_storage_class_specifier(enum token_type type)
+static bool
+is_storage_class_specifier(token_kind kind)
 {
-    return type == TOKEN_STATIC ||
-           type == TOKEN_EXTERN ||
-           type == TOKEN_AUTO   ||
-           type == TOKEN_REGISTER;
+    return kind == TOKEN_STATIC ||
+        kind == TOKEN_EXTERN ||
+        kind == TOKEN_AUTO ||
+        kind == TOKEN_REGISTER;
 }
 
-static bool is_declaration_start(enum token_type type)
+static bool
+is_declaration_start(token_kind kind)
 {
-    return is_type_specifier(type) || is_storage_class_specifier(type);
+    return is_type_specifier(kind) ||
+        is_storage_class_specifier(kind);
 }
 
-static void synchronize_block_item(void)
+static storage_class
+storage_class_from_token(token_kind kind)
 {
-    parser_state.panic_mode = false;
+    switch (kind) {
+        case TOKEN_EXTERN:
+            return STORAGE_CLASS_EXTERN;
+        case TOKEN_STATIC:
+            return STORAGE_CLASS_STATIC;
+        case TOKEN_AUTO:
+            return STORAGE_CLASS_AUTO;
+        case TOKEN_REGISTER:
+            return STORAGE_CLASS_REGISTER;
+        default:
+            return STORAGE_CLASS_NONE;
+    }
+}
 
-    while (parser_state.current.type != TOKEN_EOF) {
-        if (parser_state.previous.type == TOKEN_SEMICOLON)
+static void
+synchronize_translation_unit(void)
+{
+    parser.panic = false;
+
+    while (parser.current.kind != TOKEN_EOF) {
+        advance();
+
+        if (is_declaration_start(parser.current.kind))
+            return;
+    }
+}
+
+static void
+synchronize_block_item(void)
+{
+    parser.panic = false;
+
+    while (parser.current.kind != TOKEN_EOF) {
+        if (parser.previous.kind == TOKEN_SEMICOLON)
             return;
 
-        if (is_declaration_start(parser_state.current.type))
+        if (is_declaration_start(parser.current.kind))
             return;
 
-        switch (parser_state.current.type) {
+        switch (parser.current.kind) {
             case TOKEN_RETURN:
             case TOKEN_IF:
-            case TOKEN_ELSE:
             case TOKEN_FOR:
             case TOKEN_WHILE:
             case TOKEN_DO:
@@ -170,886 +195,716 @@ static void synchronize_block_item(void)
     }
 }
 
-static void synchronize_translation_unit(void)
+
+static ast_expr_t *parse_expression(precedence_kind prec);
+static const parse_rule_t *get_parse_rule(token_kind kind);
+static type_t *parse_type_name(void);
+
+static ast_stmt_t *parse_statement(void);
+static ast_stmt_t *parse_block(void);
+
+static ast_stmt_t *parse_declaration(bool file_scope);
+static ast_decl_t *parse_declarator(type_t *base_ty, bool allow_abstract);
+
+/*
+ * Expression parsing
+ */
+
+static ast_expr_t *
+constant(void)
 {
-    parser_state.panic_mode = false;
-
-    while (parser_state.current.type != TOKEN_EOF) {
-        if (is_declaration_start(parser_state.current.type))
-            return;
-
-        advance();
-    }
-}
-
-/* Expression parsing */
-
-static struct expr *parse_expression(enum precedence prec);
-static struct parse_rule *get_precedence(enum token_type type);
-static struct type *parse_type_name(void);
-
-static struct expr *constant(void)
-{
-    struct token tok = parser_state.previous;
+    token_t tok = parser.previous;
 
     errno = 0;
-    char *end = NULL;
-    unsigned long long value = strtoll(tok.start, &end, 10);
-
-    if (errno == ERANGE || value > (unsigned long long)INT64_MAX) {
-        error(&tok, "Constant is too large to represent as an signed int or signed long");
+    char *end = nullptr;
+    uint64_t value = strtoll(tok.start, &end, 10);
+    if (errno == ERANGE || value > INT64_MAX) {
+        error(&tok, "Literal is too large to represent as int or long");
         value = INT64_MAX;
     }
 
-    enum expr_kind kind;
+    expr_kind kind =
+        (tok.kind == TOKEN_INT_CONSTANT && value <= INT32_MAX)
+            ? EXPR_INT_CONSTANT
+            : EXPR_LONG_CONSTANT;
 
-    // The constant will become int or long from the token
-    if (tok.type == TOKEN_LONG_CONSTANT)
-        kind = EXPR_LONG_CONSTANT;
-    else if (value <= INT32_MAX)
-        kind = EXPR_INT_CONSTANT;
-    else
-        kind = EXPR_LONG_CONSTANT;
-        
-    struct expr *expr = expr_new(kind, tok);
-    expr->constant_value = (int64_t)value;
+    ast_expr_t *expr = ast_expr_new(kind, tok);
+    expr->constant_value = value;
     return expr;
 }
 
-static struct expr *identifier(void)
+static ast_expr_t *
+identifier(void)
 {
-    struct expr *expr = expr_new(EXPR_IDENTIFIER, parser_state.previous);
-    expr->identifier.name = parser_state.previous;
+    ast_expr_t *expr = ast_expr_new(EXPR_IDENTIFIER, parser.previous);
+    expr->identifier.name = parser.previous;
     return expr;
 }
 
-static struct expr *unary(void)
+
+static ast_expr_t *
+unary(void)
 {
-    struct token op = parser_state.previous;
-    struct expr *operand = parse_expression(PREC_UNARY);
+    token_t op = parser.previous;
+    ast_expr_t *operand = parse_expression(PREC_UNARY);
     if (!operand)
-        return NULL;
+        return nullptr;
 
-    struct expr *expr = expr_new(EXPR_UNARY, op);
+    ast_expr_t *expr = ast_expr_new(EXPR_UNARY, op);
     expr->unary.op = op;
     expr->unary.operand = operand;
     return expr;
 }
 
-static struct expr *pre(void)
+static ast_expr_t *
+pre(void)
 {
-    struct token op = parser_state.previous;
-    struct expr *operand = parse_expression(PREC_UNARY);
+    token_t op = parser.previous;
+    ast_expr_t *operand = parse_expression(PREC_UNARY);
     if (!operand)
-        return NULL;
+        return nullptr;
 
-    struct expr *expr = expr_new(EXPR_PRE, op);
+    ast_expr_t *expr = ast_expr_new(EXPR_PRE, op);
     expr->unary.op = op;
     expr->unary.operand = operand;
     return expr;
 }
 
-static struct expr *grouping_or_cast(void)
+static ast_expr_t *
+grouping_or_cast(void)
 {
-    struct token lparen = parser_state.previous;
+    token_t lparen = parser.previous;
 
-    if (is_type_specifier(parser_state.current.type)) {
-        struct type *target_type = parse_type_name();
+    if (is_type_specifier(parser.current.kind)) {
+        type_t *target_ty = parse_type_name();
 
         consume(TOKEN_RIGHT_PAREN, "Expected ')' after type name");
 
-        struct expr *operand = parse_expression(PREC_UNARY);
+        ast_expr_t *operand = parse_expression(PREC_UNARY);
         if (!operand)
-            return NULL;
+            return nullptr;
 
-        struct expr *expr = expr_new(EXPR_CAST, lparen);
-        expr->cast.target_type = target_type;
+        ast_expr_t *expr = ast_expr_new(EXPR_CAST, lparen);
+        expr->cast.target_ty = target_ty;
         expr->cast.operand = operand;
         return expr;
     }
 
-    struct expr *expr = parse_expression(PREC_ASSIGNMENT);
+    ast_expr_t *expr = parse_expression(PREC_ASSIGNMENT);
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after expression");
     return expr;
 }
 
-static struct expr *binary(struct expr *left)
+static ast_expr_t *
+binary(ast_expr_t *left)
 {
-    struct token op = parser_state.previous;
-    struct parse_rule *rule = get_precedence(op.type);
+    token_t op = parser.previous;
+    const parse_rule_t *rule = get_parse_rule(op.kind);
 
-    struct expr *right = parse_expression(rule->prec + 1);
+    ast_expr_t *right = parse_expression(rule->prec + 1);
     if (!right)
-        return NULL;
+        return nullptr;
 
-    struct expr *expr = expr_new(EXPR_BINARY, op);
+    ast_expr_t *expr = ast_expr_new(EXPR_BINARY, op);
     expr->binary.op = op;
     expr->binary.left = left;
     expr->binary.right = right;
     return expr;
 }
 
-static struct expr *assignment(struct expr *left)
+static ast_expr_t *
+assignment(ast_expr_t *left)
 {
-    struct token op = parser_state.previous;
-    struct expr *right = parse_expression(PREC_ASSIGNMENT);
+    token_t op = parser.previous;
+    ast_expr_t *right = parse_expression(PREC_ASSIGNMENT);
     if (!right)
-        return NULL;
+        return nullptr;
 
-    struct expr *expr = expr_new(EXPR_ASSIGNMENT, op);
+    ast_expr_t *expr = ast_expr_new(EXPR_ASSIGNMENT, op);
     expr->assignment.op = op;
     expr->assignment.lvalue = left;
     expr->assignment.rvalue = right;
     return expr;
 }
 
-static struct expr *post(struct expr *left)
+static ast_expr_t *
+post(ast_expr_t *left)
 {
-    struct token op = parser_state.previous;
+    token_t op = parser.previous;
 
-    struct expr *expr = expr_new(EXPR_POST, op);
+    ast_expr_t *expr = ast_expr_new(EXPR_POST, op);
     expr->unary.op = op;
     expr->unary.operand = left;
     return expr;
 }
 
-static struct expr *ternary(struct expr *left)
+static ast_expr_t *
+ternary(ast_expr_t *left)
 {
-    struct token tok = parser_state.previous; // ? tok
+    token_t tok = parser.previous; // ? token
     
-    struct expr *then_expr = parse_expression(PREC_ASSIGNMENT);
+    ast_expr_t *then_expr = parse_expression(PREC_ASSIGNMENT);
     if (!then_expr)
-        return NULL;
+        return nullptr;
 
     consume(TOKEN_COLON, "Expected ':' after conditional expression");
-    struct expr *else_expr = parse_expression(PREC_TERNARY);
+    ast_expr_t *else_expr = parse_expression(PREC_TERNARY);
     if (!else_expr)
-        return NULL;
+        return nullptr;
 
-    struct expr *expr = expr_new(EXPR_CONDITIONAL, tok);
+    ast_expr_t *expr = ast_expr_new(EXPR_CONDITIONAL, tok);
     expr->conditional.condition = left;
     expr->conditional.then_expr = then_expr;
     expr->conditional.else_expr = else_expr;
     return expr;
 }
 
-static struct expr *call(struct expr *left)
+static ast_expr_t *
+call(ast_expr_t *left)
 {
-    struct token tok = parser_state.previous;
-    struct expr *args_head = NULL;
-    struct expr *args_tail = NULL;
+    token_t tok = parser.previous;
+
+    ast_expr_t *expr = ast_expr_new(EXPR_CALL, tok);
+    expr->call.callee = left;
+    LIST_INIT(&expr->call.args);
 
     if (!check(TOKEN_RIGHT_PAREN)) {
         do {
-            struct expr *arg = parse_expression(PREC_ASSIGNMENT);
+            ast_expr_t *arg = parse_expression(PREC_ASSIGNMENT);
             if (!arg)
-                return NULL;
-            LIST_APPEND(args_head, args_tail, arg);
-        } while (match(TOKEN_COMMA));
+                return nullptr;
+
+            LIST_APPEND(&expr->call.args, arg);
+        } while(match(TOKEN_COMMA));
     }
 
     consume(TOKEN_RIGHT_PAREN, "Expected ')' after arguments");
-
-    struct expr *expr = expr_new(EXPR_CALL, tok);
-    expr->call.callee = left;
-    expr->call.args = args_head;
     return expr;
 }
 
-/* Each token maps to a prefix rule at the start of an expression,
- * an infix rule and minimum precedence level for infix use. */
-static struct parse_rule parse_rules[] = {
+static const parse_rule_t parse_rules[] = {
     [TOKEN_LEFT_PAREN]    = {grouping_or_cast, call, PREC_POSTFIX},
-    [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
-    [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
-    [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
-    [TOKEN_LEFT_BRACKET]  = {NULL, NULL, PREC_NONE},
-    [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
-    [TOKEN_SEMICOLON]     = {NULL, NULL, PREC_NONE},
-    [TOKEN_COLON]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_COMMA]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_QUESTION_MARK] = {NULL, ternary, PREC_TERNARY},
+    [TOKEN_RIGHT_PAREN]   = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_LEFT_BRACE]    = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_RIGHT_BRACE]   = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_LEFT_BRACKET]  = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_RIGHT_BRACKET] = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_SEMICOLON]     = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_COLON]         = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_COMMA]         = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_QUESTION_MARK] = {nullptr, ternary, PREC_TERNARY},
 
     [TOKEN_PLUS]          = {unary, binary, PREC_TERM},
     [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
-    [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
-    [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
-    [TOKEN_PERCENT]       = {NULL, binary, PREC_FACTOR},
+    [TOKEN_STAR]          = {nullptr, binary, PREC_FACTOR},
+    [TOKEN_SLASH]         = {nullptr, binary, PREC_FACTOR},
+    [TOKEN_PERCENT]       = {nullptr, binary, PREC_FACTOR},
     
-    [TOKEN_AND_AND]       = {NULL, binary, PREC_AND},
-    [TOKEN_OR_OR]         = {NULL, binary, PREC_OR},
+    [TOKEN_AND_AND]       = {nullptr, binary, PREC_AND},
+    [TOKEN_OR_OR]         = {nullptr, binary, PREC_OR},
 
-    [TOKEN_BANG]          = {unary, NULL, PREC_NONE},
-    [TOKEN_TILDE]         = {unary, NULL, PREC_NONE},
+    [TOKEN_BANG]          = {unary, nullptr, PREC_NONE},
+    [TOKEN_TILDE]         = {unary, nullptr, PREC_NONE},
 
-    [TOKEN_CARET]         = {NULL, binary, PREC_BITWISE_XOR},
-    [TOKEN_OR]            = {NULL, binary, PREC_BITWISE_OR},
-    [TOKEN_AND]           = {NULL, binary, PREC_BITWISE_AND},
+    [TOKEN_CARET]         = {nullptr, binary, PREC_BITWISE_XOR},
+    [TOKEN_OR]            = {nullptr, binary, PREC_BITWISE_OR},
+    [TOKEN_AND]           = {nullptr, binary, PREC_BITWISE_AND},
 
     [TOKEN_MINUS_MINUS]   = {pre, post, PREC_POSTFIX},
     [TOKEN_PLUS_PLUS]     = {pre, post, PREC_POSTFIX},
 
-    [TOKEN_EQUAL]         = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_PLUS_EQUAL]    = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_MINUS_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_STAR_EQUAL]    = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_SLASH_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_PERCENT_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_AND_EQUAL]     = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_OR_EQUAL]      = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_CARET_EQUAL]   = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_LESS_LESS_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
-    [TOKEN_GREATER_GREATER_EQUAL] = {NULL, assignment, PREC_ASSIGNMENT},
+    [TOKEN_EQUAL]         = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_PLUS_EQUAL]    = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_MINUS_EQUAL]   = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_STAR_EQUAL]    = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_SLASH_EQUAL]   = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_PERCENT_EQUAL] = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_AND_EQUAL]     = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_OR_EQUAL]      = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_CARET_EQUAL]   = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_LESS_LESS_EQUAL] = {nullptr, assignment, PREC_ASSIGNMENT},
+    [TOKEN_GREATER_GREATER_EQUAL] = {nullptr, assignment, PREC_ASSIGNMENT},
 
-    [TOKEN_EQUAL_EQUAL]   = {NULL, binary, PREC_EQUALITY},
-    [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
-    [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_LESS_EQUAL]    = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_LESS_LESS]     = {NULL, binary, PREC_BITWISE_SHIFT},
-    [TOKEN_GREATER]       = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_GREATER_EQUAL] = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_GREATER_GREATER] = {NULL, binary, PREC_BITWISE_SHIFT},
+    [TOKEN_EQUAL_EQUAL]   = {nullptr, binary, PREC_EQUALITY},
+    [TOKEN_BANG_EQUAL]    = {nullptr, binary, PREC_EQUALITY},
+    [TOKEN_LESS]          = {nullptr, binary, PREC_COMPARISON},
+    [TOKEN_LESS_EQUAL]    = {nullptr, binary, PREC_COMPARISON},
+    [TOKEN_LESS_LESS]     = {nullptr, binary, PREC_BITWISE_SHIFT},
+    [TOKEN_GREATER]       = {nullptr, binary, PREC_COMPARISON},
+    [TOKEN_GREATER_EQUAL] = {nullptr, binary, PREC_COMPARISON},
+    [TOKEN_GREATER_GREATER] = {nullptr, binary, PREC_BITWISE_SHIFT},
 
-    [TOKEN_IDENTIFIER]    = {identifier, NULL, PREC_NONE},
-    [TOKEN_INT_CONSTANT]  = {constant, NULL, PREC_NONE},
-    [TOKEN_LONG_CONSTANT] = {constant, NULL, PREC_NONE},
+    [TOKEN_IDENTIFIER]    = {identifier, nullptr, PREC_NONE},
+    [TOKEN_INT_CONSTANT]  = {constant, nullptr, PREC_NONE},
+    [TOKEN_LONG_CONSTANT] = {constant, nullptr, PREC_NONE},
 
-    [TOKEN_INT]           = {NULL, NULL, PREC_NONE},
-    [TOKEN_LONG]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_VOID]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_STATIC]        = {NULL, NULL, PREC_NONE},
-    [TOKEN_EXTERN]        = {NULL, NULL, PREC_NONE},
-    [TOKEN_AUTO]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_REGISTER]      = {NULL, NULL, PREC_NONE},
-    [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
-    [TOKEN_IF]            = {NULL, NULL, PREC_NONE},
-    [TOKEN_ELSE]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_FOR]           = {NULL, NULL, PREC_NONE},
-    [TOKEN_WHILE]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_DO]            = {NULL, NULL, PREC_NONE},
-    [TOKEN_BREAK]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_CONTINUE]      = {NULL, NULL, PREC_NONE},
-    [TOKEN_SWITCH]        = {NULL, NULL, PREC_NONE},
-    [TOKEN_CASE]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_DEFAULT]       = {NULL, NULL, PREC_NONE},
-    [TOKEN_GOTO]          = {NULL, NULL, PREC_NONE},
+    [TOKEN_INT]           = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_LONG]          = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_VOID]          = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_STATIC]        = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_EXTERN]        = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_AUTO]          = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_REGISTER]      = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_RETURN]        = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_IF]            = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_ELSE]          = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_FOR]           = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_WHILE]         = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_DO]            = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_BREAK]         = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_CONTINUE]      = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_SWITCH]        = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_CASE]          = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_DEFAULT]       = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_GOTO]          = {nullptr, nullptr, PREC_NONE},
 
-    [TOKEN_ERROR]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_ERROR]         = {nullptr, nullptr, PREC_NONE},
+    [TOKEN_EOF]           = {nullptr, nullptr, PREC_NONE},
 };
 
-static struct parse_rule *get_precedence(enum token_type type)
+static const parse_rule_t *
+get_parse_rule(token_kind kind)
 {
-    return &parse_rules[type];
+    return &parse_rules[kind];
 }
 
-static struct expr *parse_expression(enum precedence prec)
+static ast_expr_t *
+parse_expression(precedence_kind prec)
 {
-    advance();
-    prefix_parse_fn prefix = get_precedence(parser_state.previous.type)->prefix;
-    if (!prefix) {
-        error(&parser_state.previous, "Expected expression");
-        return NULL;
+    prefix_parse_fn prefix_fn =
+        get_parse_rule(parser.current.kind)->prefix;
+    if (!prefix_fn) {
+        error(&parser.current, "Expected expression");
+        return nullptr;
     }
 
-    struct expr *left = prefix();
+    advance();
+    ast_expr_t *left = prefix_fn();
 
-    while (prec <= get_precedence(parser_state.current.type)->prec) {
+    while (prec <= get_parse_rule(parser.current.kind)->prec) {
         advance();
-        infix_parse_fn infix = get_precedence(parser_state.previous.type)->infix;
-        left = infix(left);
+        infix_parse_fn infix_fn =
+            get_parse_rule(parser.previous.kind)->infix;
+        left = infix_fn(left);
     }
 
     return left;
 }
 
-static struct stmt *parse_statement(void);
-static struct block_item *parse_block_item(void);
-static struct stmt *parse_block_after_lbrace(void);
-static struct decl *parse_declaration(void);
+/*
+ * Statement parsing
+ */
 
-static struct block_item *parse_case_default_items(void)
+static ast_stmt_t *
+parse_statement(void)
 {
-    struct block_item *head = NULL;
-    struct block_item *tail = NULL;
-
-    /*
-     * C11 doesn't allow decl after label, C23 does
-     * TODO: Maybe allow this
-     */
-    bool first = true;
-    while (!check(TOKEN_CASE) && !check(TOKEN_DEFAULT) &&
-            !check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-        if (first && is_declaration_start(parser_state.current.type)) {
-            error(&parser_state.current, "Label followed by declaration");
-            return NULL;
-        }
-
-        struct block_item *item = parse_block_item();
-        if (!item)
-            return NULL;
-
-        first = false;
-        LIST_APPEND(head, tail, item);
+    if (is_declaration_start(parser.current.kind)) {
+        error(&parser.current, "Expected statement, not declaration.");
+        return nullptr;
     }
 
-    return head;
-}
-
-static struct stmt *parse_statement(void)
-{
-    if (is_declaration_start(parser_state.current.type)) {
-        error(&parser_state.current, "Expected statement, not declaration");
-        return NULL;
+    if (check(TOKEN_LEFT_BRACE)) {
+        return parse_block();
     }
 
-    if (match(TOKEN_LEFT_BRACE))
-        return parse_block_after_lbrace();
+    if (match(TOKEN_SEMICOLON)) {
+        return ast_stmt_new(STMT_NULL, parser.previous);
+    }
 
     if (match(TOKEN_RETURN)) {
-        struct token tok = parser_state.previous;
-        struct expr *expr = NULL;
+        ast_stmt_t *stmt = ast_stmt_new(STMT_RETURN, parser.previous);
 
-        if (!check(TOKEN_SEMICOLON) && !check(TOKEN_EOF)) {
-            expr = parse_expression(PREC_ASSIGNMENT);
-            if (!expr)
-                return NULL;
-        }
+        if (!check(TOKEN_SEMICOLON))
+            stmt->return_stmt.expr = parse_expression(PREC_ASSIGNMENT);
 
-        consume(TOKEN_SEMICOLON, "Expected ';' after return");
-
-        struct stmt *stmt = stmt_new(STMT_RETURN, tok);
-        stmt->return_stmt.expr = expr;
+        consume(TOKEN_SEMICOLON, "Expected ';' after 'return'");
         return stmt;
     }
 
     if (match(TOKEN_IF)) {
-        struct token tok = parser_state.previous;
+        ast_stmt_t *stmt = ast_stmt_new(STMT_IF, parser.previous);
 
         consume(TOKEN_LEFT_PAREN, "Expected '(' after 'if'");
-        struct expr *cond = parse_expression(PREC_ASSIGNMENT);
-        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'if' condition");
+        stmt->if_stmt.condition = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'if'");
 
-        struct stmt *then_stmt = parse_statement();
-        if (!then_stmt)
-            return NULL;
-
-        struct stmt *else_stmt = NULL;
+        stmt->if_stmt.then_stmt = parse_statement();
         if (match(TOKEN_ELSE))
-            else_stmt = parse_statement();
+            stmt->if_stmt.else_stmt = parse_statement();
 
-        struct stmt *stmt = stmt_new(STMT_IF, tok);
-        stmt->if_stmt.condition = cond;
-        stmt->if_stmt.then_stmt = then_stmt;
-        stmt->if_stmt.else_stmt = else_stmt;
-        return stmt;
-    }
-
-    if (match(TOKEN_FOR)) {
-        struct token tok = parser_state.previous;
-
-        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'for'");
-
-        struct for_init *init = NULL;
-
-        if (is_declaration_start(parser_state.current.type)) {
-            init = calloc(1, sizeof(struct for_init));
-            init->is_decl = true;
-            init->decls = parse_declaration();
-        } else if (!match(TOKEN_SEMICOLON)) {
-            init = calloc(1, sizeof(struct for_init));
-            init->is_decl = false;
-            init->expr = parse_expression(PREC_ASSIGNMENT);
-            if (!init->expr)
-                return NULL;
-
-            consume(TOKEN_SEMICOLON, "Expected ';' after for-init expression");
-        }
-
-        struct expr *cond = NULL;
-        if (!match(TOKEN_SEMICOLON)) {
-            cond = parse_expression(PREC_ASSIGNMENT);
-            if (!cond)
-                return NULL;
-
-            consume(TOKEN_SEMICOLON, "Expected ';' after for-condition");
-        }
-
-        struct expr *post = NULL;
-        if (!check(TOKEN_RIGHT_PAREN)) {
-            post = parse_expression(PREC_ASSIGNMENT);
-            if (!post)
-                return NULL;
-        }
-
-        consume(TOKEN_RIGHT_PAREN, "Expected ')' after for clauses");
-
-        struct stmt *body = parse_statement();
-        if (!body)
-            return NULL;
-
-        struct stmt *stmt = stmt_new(STMT_FOR, tok);
-        stmt->for_stmt.init = init;
-        stmt->for_stmt.condition = cond;
-        stmt->for_stmt.post = post;
-        stmt->for_stmt.body = body;
         return stmt;
     }
 
     if (match(TOKEN_WHILE)) {
-        struct token tok = parser_state.previous;
+        ast_stmt_t *stmt = ast_stmt_new(STMT_WHILE, parser.previous);
 
         consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'");
-        struct expr *cond = parse_expression(PREC_ASSIGNMENT);
-        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'while' condition");
+        stmt->loop.condition = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'while'");
 
-        struct stmt *body = parse_statement();
-        if (!body)
-            return NULL;
-
-        struct stmt *stmt = stmt_new(STMT_WHILE, tok);
-        stmt->while_stmt.condition = cond;
-        stmt->while_stmt.body = body;
+        stmt->loop.body = parse_statement();
         return stmt;
     }
 
     if (match(TOKEN_DO)) {
-        struct token tok = parser_state.previous;
+        ast_stmt_t *stmt = ast_stmt_new(STMT_DOWHILE, parser.previous);
 
-        struct stmt *body = parse_statement();
-        if (!body)
-            return NULL;
+        stmt->loop.body = parse_statement();
 
         consume(TOKEN_WHILE, "Expected 'while' after 'do' body");
         consume(TOKEN_LEFT_PAREN, "Expected '(' after 'while'");
-        struct expr *cond = parse_expression(PREC_ASSIGNMENT);
-        consume(TOKEN_RIGHT_PAREN, "Expected ')' after do-while condition");
-        consume(TOKEN_SEMICOLON, "Expected ';' after do-while");
+        stmt->loop.condition = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'while' condition");
+        consume(TOKEN_SEMICOLON, "Expected ';' after do-while statement");
 
-        struct stmt *stmt = stmt_new(STMT_DOWHILE, tok);
-        stmt->dowhile_stmt.condition = cond;
-        stmt->dowhile_stmt.body = body;
-        return stmt;
-
-    }
-
-    if (match(TOKEN_CASE)) {
-        struct token tok = parser_state.previous;
-
-        struct expr *value = parse_expression(PREC_ASSIGNMENT);
-        if (!value)
-            return NULL;
-
-        consume(TOKEN_COLON, "Expected ':' after case value");
-
-        struct stmt *stmt = stmt_new(STMT_CASE, tok);
-        stmt->case_stmt.value = value;
-        stmt->case_stmt.items = parse_case_default_items();
         return stmt;
     }
 
-    if (match(TOKEN_DEFAULT)) {
-        struct token tok = parser_state.previous;
+    if (match(TOKEN_FOR)) {
+        ast_stmt_t *stmt = ast_stmt_new(STMT_FOR, parser.previous);
 
-        consume(TOKEN_COLON, "Expected ':' after 'default'");
+        consume(TOKEN_LEFT_PAREN, "Expected '(' after 'for'");
+        if (is_declaration_start(parser.current.kind)) {
+            stmt->loop.init = parse_declaration(false);
+        } else if (!match(TOKEN_SEMICOLON)) {
+            ast_stmt_t *init = ast_stmt_new(STMT_EXPR, parser.current);
+            init->expr.expr = parse_expression(PREC_ASSIGNMENT);
+            consume(TOKEN_SEMICOLON, "Expected ';' after 'for' initializer");
+            stmt->loop.init = init;
+        }
 
-        struct stmt *stmt = stmt_new(STMT_DEFAULT, tok);
-        stmt->default_stmt.items = parse_case_default_items();
+        if (!check(TOKEN_SEMICOLON))
+            stmt->loop.condition = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_SEMICOLON, "Expected ';' after 'for' condition");
+        
+        if (!check(TOKEN_RIGHT_PAREN))
+            stmt->loop.post = parse_expression(PREC_ASSIGNMENT);
+        consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'for'");
+
+        stmt->loop.body = parse_statement();
         return stmt;
     }
 
     if (match(TOKEN_SWITCH)) {
-        struct token tok = parser_state.previous;
-        
+        ast_stmt_t *stmt = ast_stmt_new(STMT_SWITCH, parser.previous);
+
         consume(TOKEN_LEFT_PAREN, "Expected '(' after 'switch'");
-        struct expr *cond = parse_expression(PREC_ASSIGNMENT);
+        stmt->switch_stmt.condition = parse_expression(PREC_ASSIGNMENT);
         consume(TOKEN_RIGHT_PAREN, "Expected ')' after 'switch' condition");
 
-        struct stmt *body = parse_statement();
-        if (!body)
-            return NULL;
+        stmt->switch_stmt.body = parse_statement();
+        return stmt;
+    }
 
-        struct stmt *stmt = stmt_new(STMT_SWITCH, tok);
-        stmt->switch_stmt.condition = cond;
-        stmt->switch_stmt.body = body;
+    if (match(TOKEN_CASE)) {
+        ast_stmt_t *stmt = ast_stmt_new(STMT_CASE, parser.previous);
+
+        stmt->case_stmt.expr = parse_expression(PREC_TERNARY);
+        consume(TOKEN_COLON, "Expected ':' after 'case' value");
+
+        stmt->case_stmt.stmt = parse_statement();
+        return stmt;
+    }
+
+    if (match(TOKEN_DEFAULT)) {
+        ast_stmt_t *stmt = ast_stmt_new(STMT_DEFAULT, parser.previous);
+
+        consume(TOKEN_COLON, "Expected ':' after 'default'");
+        
+        stmt->default_stmt.stmt = parse_statement();
+        return stmt;
+    }
+
+    if (match(TOKEN_GOTO)) {
+        ast_stmt_t *stmt = ast_stmt_new(STMT_GOTO, parser.previous);
+
+        stmt->goto_stmt.label = parser.current;
+        consume(TOKEN_IDENTIFIER, "Expected label name after 'goto'");
+        consume(TOKEN_SEMICOLON, "Expected ';' after 'goto' statement");
         return stmt;
     }
 
     if (match(TOKEN_BREAK)) {
-        struct token tok = parser_state.previous;
+        ast_stmt_t *stmt = ast_stmt_new(STMT_BREAK, parser.previous);
         consume(TOKEN_SEMICOLON, "Expected ';' after 'break'");
-        return stmt_new(STMT_BREAK, tok);
+        return stmt;
     }
 
     if (match(TOKEN_CONTINUE)) {
-        struct token tok = parser_state.previous;
+        ast_stmt_t *stmt = ast_stmt_new(STMT_CONTINUE, parser.previous);
         consume(TOKEN_SEMICOLON, "Expected ';' after 'continue'");
-        return stmt_new(STMT_CONTINUE, tok);
-    }
-
-    if (match(TOKEN_GOTO)) {
-        struct token tok = parser_state.previous;
-        
-        consume(TOKEN_IDENTIFIER, "Expected label after 'goto'");
-        struct token label = parser_state.previous;
-
-        consume(TOKEN_SEMICOLON, "Expected ';' after 'goto' statement");
-
-        struct stmt *stmt = stmt_new(STMT_GOTO, tok);
-        stmt->goto_stmt.label = label;
         return stmt;
     }
 
-    if (match(TOKEN_SEMICOLON))
-        return stmt_new(STMT_NULL, parser_state.previous);
-
-    /*
-     * Either an expression statement or
-     * label (identifier: statement)
-     */
-    struct expr *expr = parse_expression(PREC_ASSIGNMENT);
-    if (!expr)
-        return NULL;
-
-    if (expr->kind == EXPR_IDENTIFIER && match(TOKEN_COLON)) {
-        struct stmt *labeled = parse_statement();
-
-        struct stmt *stmt = stmt_new(STMT_LABEL, expr->tok);
-        stmt->label_stmt.name = expr->identifier.name;
-        stmt->label_stmt.stmt = labeled;
+    if (check(TOKEN_IDENTIFIER) &&
+        lexer_peek_token().kind == TOKEN_COLON) {
+        token_t name = parser.current;
+        advance(); // ident
+        advance(); // ':'
+                   
+        ast_stmt_t *stmt = ast_stmt_new(STMT_LABEL, name);
+        stmt->label_stmt.label = name;
+        stmt->label_stmt.stmt = parse_statement();
         return stmt;
     }
 
-    consume(TOKEN_SEMICOLON, "Expected ';' after expression-statement");
-
-    struct stmt *stmt = stmt_new(STMT_EXPR, parser_state.previous);
-    stmt->expr_stmt.expr = expr;
+    /* Expression statement */
+    ast_stmt_t *stmt = ast_stmt_new(STMT_EXPR, parser.current);
+    stmt->expr.expr = parse_expression(PREC_ASSIGNMENT);
+    consume(TOKEN_SEMICOLON, "Expected ';' after expression statement");
     return stmt;
 }
 
-static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
-                                                bool allows_abstract_name);
-
-static struct type *parse_type_from_count(int int_count, int long_count,
-                                        int void_count, struct token err_tok)
+static ast_stmt_t *
+parse_block_item(void)
 {
-    if (void_count) {
-        if (void_count == 1 && int_count == 0 && long_count == 0)
-            return type_void();
+    if (is_declaration_start(parser.current.kind))
+        return parse_declaration(false);
 
-        error(&err_tok, "Invalid type specifier combination");
-        return type_int();
-    }
-
-    if (long_count) {
-        if (long_count == 1 && int_count <= 1)
-            return type_long();
-
-        error(&err_tok, "Invalid use of 'long'");
-        return type_long();
-    }
-
-    if (int_count == 1)
-        return type_int();
-
-    error(&err_tok, "Expected declaration type");
-    return type_int();
+    return parse_statement();
 }
 
-static struct type *parse_type_name(void)
+static ast_stmt_t *
+parse_block(void)
 {
-    int int_count = 0;
-    int long_count = 0;
-    int void_count = 0;
+    ast_stmt_t *block = ast_stmt_new(STMT_BLOCK, parser.current);
+    consume(TOKEN_LEFT_BRACE, "Expected '{'");
 
-    struct token first_type_tok = parser_state.current;
+    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+        const char *before = parser.current.start;
 
-    while(is_type_specifier(parser_state.current.type)) {
-        if (is_type_specifier(parser_state.current.type)) {
-            if (parser_state.current.type == TOKEN_INT)
-                int_count++;
-            else if (parser_state.current.type == TOKEN_LONG)
-                long_count++;
-            else if (parser_state.current.type == TOKEN_VOID)
-                void_count++;
+        ast_stmt_t *item = parse_block_item();
+        LIST_APPEND(&block->block.items, item);
 
-            advance();
+        if (parser.panic) {
+            /* Makes sure synchronization isn't
+             * in an endless loop */
+            if (parser.current.start == before)
+                advance();
+
+            synchronize_block_item();
         }
     }
 
-    return parse_type_from_count(int_count, long_count, void_count, first_type_tok);
+    consume(TOKEN_RIGHT_BRACE, "Expected '}' at the end of block");
+    return block;
 }
 
-static struct decl_specs parse_decl_specs(void)
+/*
+ * Declaration parsing
+ */
+
+static decl_specs_t
+parse_declaration_specs(void)
 {
-    struct decl_specs specs = {0};
-    specs.storage_class = SC_NONE;
+    decl_specs_t specs = {
+        .tok = parser.current
+    };
 
-    int int_count = 0;
-    int long_count = 0;
-    int void_count = 0;
-    int storage_class_count = 0;
+    int n_void = 0, n_int = 0, n_long = 0;
+    bool saw_sc = false;
 
-    struct token first_type_tok = {0};
-
-    while (is_declaration_start(parser_state.current.type)) {
-        if (!first_type_tok.start)
-            first_type_tok = parser_state.current;
-
-        if (is_storage_class_specifier(parser_state.current.type)) {
-            storage_class_count++;
-
-            if (storage_class_count > 1)
-                error(&parser_state.current, "Multiple storage-class specifiers");
-
-            specs.storage_tok = parser_state.current;
-
-            if (parser_state.current.type == TOKEN_STATIC)
-                specs.storage_class = SC_STATIC;
-            else if (parser_state.current.type == TOKEN_EXTERN)
-                specs.storage_class = SC_EXTERN;
-            else if (parser_state.current.type == TOKEN_AUTO)
-                specs.storage_class = SC_AUTO;
-            else if (parser_state.current.type == TOKEN_REGISTER)
-                specs.storage_class = SC_REGISTER;
-
-            advance();
-            continue;
-        }
-
-        if (is_type_specifier(parser_state.current.type)) {
-            specs.type_tok = parser_state.current;
-
-            if (parser_state.current.type == TOKEN_INT)
-                int_count++;
-            else if (parser_state.current.type == TOKEN_LONG)
-                long_count++;
-            else if (parser_state.current.type == TOKEN_VOID)
-                void_count++;
-
-            advance();
-            continue;
+    while (is_declaration_start(parser.current.kind)) {
+        token_t tok = parser.current;
+        advance();
+        
+        switch (tok.kind) {
+            case TOKEN_INT:
+                n_int++;
+                break;
+            case TOKEN_LONG:
+                n_long++;
+                break;
+            case TOKEN_VOID:
+                n_void++;
+                break;
+            default:
+                if (saw_sc)
+                    error(&tok,
+                        "Multiple storage classes in declaration");
+                saw_sc = true;
+                specs.sc = storage_class_from_token(tok.kind);
         }
     }
 
-    if (!first_type_tok.start)
-        first_type_tok = parser_state.current;
-
-    specs.base_type = parse_type_from_count(int_count, long_count, void_count, first_type_tok);
+    if (n_void == 1 && n_int == 0 && n_long == 0)
+        specs.ty = type_void();
+    else if (n_long == 1 && n_int <= 1 && n_void == 0)
+        specs.ty = type_long();
+    else if (n_int == 1 && n_long == 0 && n_void == 0)
+        specs.ty = type_int();
+    else {
+        error(&specs.tok, n_void + n_int + n_long == 0 
+                ? "Expected type specifier"
+                : "Invalid combination of type specifiers");
+        specs.ty = type_int();
+    }
 
     return specs;
 }
 
-static struct decl *parse_parameter_declaration(void)
+static type_t *
+parse_type_name(void)
 {
-    struct decl_specs specs = parse_decl_specs();
+    decl_specs_t specs = parse_declaration_specs();
 
-    struct decl *d = parse_declarator_from_specs(&specs, true);
-    if (!d)
-        return NULL;
+    if (specs.sc != STORAGE_CLASS_NONE)
+        error(&specs.tok, "Storage class not allowed in type name");
 
-    d->is_parameter = true;
-
-    return d;
+    return specs.ty;
 }
 
-static struct decl *parse_declarator_from_specs(struct decl_specs *specs,
-                                                bool allows_abstract_name)
+static ast_decl_t *
+parse_parameter_declaration(void)
 {
-    struct token name = {0};
-
-    if (check(TOKEN_IDENTIFIER)) {
-        advance();
-        name = parser_state.previous;
-    } else if (!allows_abstract_name) {
-        consume(TOKEN_IDENTIFIER, "Expected declaration identifier");
-        name = parser_state.previous;
-    }
-
-    if (match(TOKEN_LEFT_PAREN)) {
-        struct decl *params_head = NULL;
-        struct decl *params_tail = NULL;
-
-        int param_count = 0;
-        bool has_prototype = true;
-
-        if (match(TOKEN_RIGHT_PAREN)) {
-            // int f() -> not a prototype
-            has_prototype = false;
-        } else if (match(TOKEN_VOID)) {
-            consume(TOKEN_RIGHT_PAREN, "'void' must be the only parameter");
-        } else {
-            do {
-                struct decl *param = parse_parameter_declaration();
-                if (!param)
-                    return NULL;
-
-                param_count++;
-                LIST_APPEND(params_head, params_tail, param);
-            } while (match(TOKEN_COMMA));
-
-            consume(TOKEN_RIGHT_PAREN, "Expected ')' after parameter list");
-        }
-
-        struct decl *d = decl_new(DECL_FUNCTION, name);
-        d->storage_class = specs->storage_class;
-        d->func.params = params_head;
-        d->type = type_function(specs->base_type, params_head, param_count, has_prototype);
-        return d;
-    }
-
-    struct decl *d = decl_new(DECL_OBJECT, name);
-    d->storage_class = specs->storage_class;
-    d->type = specs->base_type;
-
-    return d;
+    decl_specs_t specs = parse_declaration_specs();
+    
+    ast_decl_t *param = parse_declarator(specs.ty, true);
+    param->sc = specs.sc; /* Sema: only 'register' allowed */
+    param->is_parameter = true;
+    return param;
 }
 
-static struct decl *parse_init_declarator(struct decl_specs *specs)
+
+static void
+parse_parameter_list(ast_decl_t *fn, vector *param_types)
 {
-    struct decl *d = parse_declarator_from_specs(specs, false);
-    if (!d)
-        return NULL;
+    if (match(TOKEN_RIGHT_PAREN))
+        return;
 
-    if (match(TOKEN_EQUAL)) {
-        if (d->kind == DECL_FUNCTION) {
-            error(&d->name, "Function declaration cannot have an initializer");
-            return NULL;
-        }
-
-        d->object.init = parse_expression(PREC_ASSIGNMENT);
-        if (!d->object.init)
-            return NULL;
+    if (check(TOKEN_VOID) &&
+        lexer_peek_token().kind == TOKEN_RIGHT_PAREN) {
+        advance(); // 'void'
+        advance(); // ')'
+        return;
     }
-
-    return d;
-}
-
-static struct decl *parse_declaration(void)
-{
-    struct decl_specs specs = parse_decl_specs();
-
-    struct decl *head = NULL;
-    struct decl *tail = NULL;
 
     do {
-        struct decl *d = parse_init_declarator(&specs);
-        if (!d)
-            return NULL;
+        ast_decl_t *param = parse_parameter_declaration();
 
-        LIST_APPEND(head, tail, d);
-    } while (match(TOKEN_COMMA));
+        LIST_APPEND(&fn->function.params, param);
+        vector_push(param_types, &param->ty);
+    } while(match(TOKEN_COMMA));
 
-    consume(TOKEN_SEMICOLON, "Expected ';' after declaration");
-    return head;
+    consume(TOKEN_RIGHT_PAREN, "Expected ')' after parameter list");
 }
 
-static struct block_item *parse_block_item(void)
+static ast_decl_t *
+parse_declarator(type_t *base_ty, bool allow_abstract)
 {
-    if (is_declaration_start(parser_state.current.type)) {
-        struct decl *decls = parse_declaration();
-        if (!decls)
-            return NULL;
+    token_t name = parser.current;
 
-        struct block_item *item = block_item_new(BLOCK_ITEM_DECL, parser_state.current);
-
-        item->decls = decls;
-        return item;
-    }
-
-    struct stmt *stmt = parse_statement();
-    if (!stmt)
-        return NULL;
-
-    struct block_item *item = block_item_new(BLOCK_ITEM_STMT, parser_state.current);
-    item->stmt = stmt;
-    return item;
-}
-
-static struct stmt *parse_block_after_lbrace(void)
-{
-    struct stmt *block = stmt_new(STMT_BLOCK, parser_state.previous);
-    struct block_item *tail = NULL;
-
-    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
-        struct block_item *item = parse_block_item();
-
-        if (!item || parser_state.panic_mode) {
-            synchronize_block_item();
-            continue;
+    if (match(TOKEN_IDENTIFIER)) {
+        name = parser.previous;
+    } else {
+        if (!allow_abstract) {
+            error(&name,
+                    "Expected identifier in declaration");
         }
 
-        LIST_APPEND(block->block.items, tail, item);
+        name.len = 0;
     }
 
-    consume(TOKEN_RIGHT_BRACE, "Expected '}' after compound statement");
+    if (!match(TOKEN_LEFT_PAREN)) {
+        ast_decl_t *decl = ast_decl_new(DECL_OBJECT, name);
+        decl->ty = base_ty;
+        return decl;
+    }
 
-    return block;
+    ast_decl_t *decl = ast_decl_new(DECL_FUNCTION, name);
+
+    vector param_types;
+    VECTOR_INIT(&param_types, type_t *);
+    parse_parameter_list(decl, &param_types);
+
+    decl->ty = type_function(base_ty, param_types, false);
+    return decl;
 }
 
-static struct decl *parse_external_declaration(void)
+static ast_decl_t *
+parse_init_declarator(decl_specs_t *specs)
 {
-    struct decl_specs specs = parse_decl_specs();
-    struct decl *first = parse_init_declarator(&specs);
-    if (!first)
-        return NULL;
+    ast_decl_t *decl = parse_declarator(specs->ty, false);
+    decl->sc = specs->sc;
 
-    if (first->kind == DECL_FUNCTION && match(TOKEN_LEFT_BRACE)) {
-        first->is_definition = true;
-        first->func.body = parse_block_after_lbrace();
+    if (match(TOKEN_EQUAL)) {
+        token_t equal = parser.previous;
+        ast_expr_t *init = parse_expression(PREC_ASSIGNMENT);
 
-        return first;
+        if (decl->kind == DECL_FUNCTION) {
+            error(&equal,
+                    "Function declaration cannot have an initializer");
+        } else {
+            decl->object.init = init;
+        }
     }
 
-    struct decl *head = first;
-    struct decl *tail = first;
+    return decl;
+}
+
+/* One declaration: int a, f();
+ * Returns ast_decl_t STMT_DECL 
+ * With a declaration list */
+static ast_stmt_t *
+parse_declaration(bool file_scope)
+{
+    ast_stmt_t *stmt = ast_stmt_new(STMT_DECL, parser.current);
+    decl_specs_t specs = parse_declaration_specs();
+
+    ast_decl_t *first = parse_init_declarator(&specs);
+    LIST_APPEND(&stmt->decl.decls, first);
+
+    if (first->kind == DECL_FUNCTION && check(TOKEN_LEFT_BRACE)) {
+        if (!file_scope) {
+            error(&parser.current,
+                    "Function definition not allowed at block scope");
+        }
+
+        first->function.body = parse_block();
+        return stmt;
+    }
 
     while (match(TOKEN_COMMA)) {
-        struct decl *d = parse_init_declarator(&specs);
-
-        if (!d)
-            return NULL;
-
-        LIST_APPEND(head, tail, d);
+        ast_decl_t *decl = parse_init_declarator(&specs);
+        LIST_APPEND(&stmt->decl.decls, decl);
     }
 
-    consume(TOKEN_SEMICOLON, "Expected ';' after external declaration");
-    return head;
+    consume(TOKEN_SEMICOLON, "Expected ';' after declaration");
+    return stmt;
 }
 
-struct ast_program *parse_translation_unit(const char *source)
+ast_program_t *
+parse_translation_unit(
+    const char *source,
+    const char *filename
+)
 {
-    parser_state = (struct parser){0};
+    parser = (parser_t){};
 
-    lexer_init(source);
+    lexer_init(source, filename);
     advance();
 
-    struct ast_program *program = calloc(1, sizeof(struct ast_program));
-    struct decl *tail = NULL;
+    ast_program_t *program = ast_program_new();
 
     while (!check(TOKEN_EOF)) {
-        if (!is_declaration_start(parser_state.current.type)) {
-            error(&parser_state.current, "Expected external declaration");
-            synchronize_translation_unit();
-            continue;
+        const char *before = parser.current.start;
+
+        if (!is_declaration_start(parser.current.kind)) {
+            error(&parser.current, "Expected declaration");
+        } else {
+            ast_stmt_t *decls = parse_declaration(true);
+            LIST_CONCAT(&program->decls, &decls->decl.decls);
         }
 
-        struct decl *decls = parse_external_declaration();
+        if (parser.panic) {
+            if (parser.current.start == before)
+                advance();
 
-        if (!decls || parser_state.panic_mode) {
             synchronize_translation_unit();
-            continue;
-        }
-
-        for (struct decl *decl = decls; decl; ) {
-            struct decl *next = decl->next;
-            decl->next = NULL;
-
-            LIST_APPEND(program->decls, tail, decl);
-
-            decl = next;
         }
     }
 
-    return parser_state.had_error ? NULL : program;
+    return diagnostics_had_error() ?
+        nullptr :
+        program;
 }

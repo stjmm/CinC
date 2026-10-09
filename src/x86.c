@@ -1,996 +1,1076 @@
-/*
- * Tacky IR -> x86-64 Assembly (AT&T Syntax)
- *
- * Phase 1: Convert IR instructions into ASM instructions
- *          keeps pseudo (temporary) operands
- *
- * Phase 2: Replace every pseudo operand with a stack slot.
- *          Returns total needed stack size
- *
- * Phase 3: Function prologue, rewrite any illegal x86 ops.
- */
-#include <alloca.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#include <stdarg.h>
-
 #include "x86.h"
-#include "ast.h"
+#include "base/memory.h"
 #include "ir.h"
-#include "base/hash_map.h"
+#include "sema.h"
+#include "type.h"
 
-#define STACK_SLOT_SIZE 4
-#define ARG_REG_COUNT 6
+typedef struct {
+    asm_function_t *fn; // Current function
 
-static const enum reg arg_regs[] = {
-    REG_DI,
-    REG_SI,
-    REG_DX,
-    REG_CX,
-    REG_R8,
-    REG_R9
+    // Indexed by pseudo(id) used in phase 2
+    int *pseudo_size;
+    int *pseudo_offset;
+    int frame_size; // Bytes of slots handed out in the current function
+} x86_builder_t;
+
+static x86_builder_t x86;
+
+static constexpr size_t ARG_REG_COUNT = 6;
+static const asm_reg arg_regs[ARG_REG_COUNT] = {
+    REG_DI, REG_SI, REG_DX, REG_CX, REG_R8, REG_R9
 };
 
-/* Phase 1: Build ASM AST from IR AST */
+static asm_size
+size_of(const type_t *ty)
+{
+    return type_size(ty) == 8 ? ASM_QUADWORD : ASM_LONGWORD;
+}
 
-static enum asm_op convert_unop(enum ir_unary_op op)
+static asm_unary_op
+convert_unary_op(ir_unary_op op)
 {
     switch (op) {
-        case IR_UNOP_NEG:     return ASM_NEG;
-        case IR_UNOP_BIT_NOT: return ASM_NOT;
-        default:            return ASM_NEG; // Unreachable
+        case IR_UNARY_NEG:
+            return ASM_UNARY_NEG;
+        case IR_UNARY_BIT_NOT:
+            return ASM_UNARY_NOT;
+        default:
+            (void)0;
     }
 }
 
-static enum asm_op convert_binop(enum ir_binary_op op)
+static asm_binary_op
+convert_binary_op(ir_binary_op op)
 {
     switch (op) {
-        case IR_BINOP_ADD:     return ASM_ADD;
-        case IR_BINOP_SUB:     return ASM_SUB;
-        case IR_BINOP_MUL:     return ASM_IMUL;
-        case IR_BINOP_BIT_AND: return ASM_AND;
-        case IR_BINOP_BIT_OR:  return ASM_OR;
-        case IR_BINOP_BIT_XOR: return ASM_XOR;
-        case IR_BINOP_SHL:     return ASM_SHL;
-        case IR_BINOP_SHR:     return ASM_SHR;
-        default:             return ASM_ADD; // Unreachable
+        case IR_BINARY_ADD:
+            return ASM_BINARY_ADD;
+        case IR_BINARY_SUB:
+            return ASM_BINARY_SUB;
+        case IR_BINARY_MUL:
+            return ASM_BINARY_IMUL;
+        case IR_BINARY_BIT_AND:
+            return ASM_BINARY_AND;
+        case IR_BINARY_BIT_OR:
+            return ASM_BINARY_OR;
+        case IR_BINARY_BIT_XOR:
+            return ASM_BINARY_XOR;
+        case IR_BINARY_SHL:
+            return ASM_BINARY_SAL;
+        case IR_BINARY_SHR:
+            return ASM_BINARY_SAR;
+        default:
+            (void)0;
     }
 }
 
-static enum cond_code convert_to_cond(enum ir_binary_op op)
+static asm_cond
+convert_cond(ir_binary_op op)
 {
     switch (op) {
-        case IR_BINOP_EQ: return COND_E;
-        case IR_BINOP_NE: return COND_NE;
-        case IR_BINOP_LT: return COND_L;
-        case IR_BINOP_LE: return COND_LE;
-        case IR_BINOP_GT: return COND_G;
-        case IR_BINOP_GE: return COND_GE;
-        default:               return COND_E; // Unreachable
+        case IR_BINARY_EQ:
+            return COND_E;
+        case IR_BINARY_NE:
+            return COND_NE;
+        case IR_BINARY_LT:
+            return COND_L;
+        case IR_BINARY_LE:
+            return COND_LE;
+        case IR_BINARY_GT:
+            return COND_G;
+        case IR_BINARY_GE:
+            return COND_GE;
+        default:
+            (void)0;
     }
 }
 
-static struct operand make_reg(enum reg r)
+/*
+ * Operands
+ */
+
+static asm_operand_t
+operand_reg(asm_reg reg)
 {
-    return (struct operand){ .type = OPERAND_REG, .reg = r, };
+    return (asm_operand_t){
+        .kind = OPERAND_REG,
+        .reg = reg
+    };
 }
 
-static struct operand make_imm(int imm)
+static asm_operand_t
+operand_imm(int64_t imm)
 {
-    return (struct operand){ .type = OPERAND_IMM, .imm = imm };
+    return (asm_operand_t){
+        .kind = OPERAND_IMM,
+        .imm = imm
+    };
 }
 
-static struct operand make_stack(int offset)
+static asm_operand_t
+operand_pseudo(uint32_t pseudo)
 {
-    return (struct operand){ .type = OPERAND_STACK, .stack = offset };
+    return (asm_operand_t){
+        .kind = OPERAND_PSEUDO,
+        .pseudo = pseudo
+    };
 }
 
-static struct operand make_pseudo(const char *name)
+static asm_operand_t
+operand_stack(int32_t stack)
 {
-    return (struct operand){ .type = OPERAND_PSEUDO, .pseudo = name };
+    return (asm_operand_t){
+        .kind = OPERAND_STACK,
+        .stack = stack
+    };
 }
 
-static struct operand make_data(const char *name)
+static asm_operand_t
+operand_data(symbol_t *sym)
 {
-    return (struct operand){ .type = OPERAND_DATA, .data = name };
+    return (asm_operand_t){
+        .kind = OPERAND_DATA,
+        .data = sym,
+    };
 }
 
-static struct asm_instr *new_instr(enum asm_instr_type type)
+static asm_operand_t
+operand_from_value(ir_value_t value)
 {
-    struct asm_instr *instr = calloc(1, sizeof(struct asm_instr));
-    instr->type = type;
+    switch (value.kind) {
+        case IR_VALUE_CONSTANT:
+            return operand_imm(value.constant);
+        case IR_VALUE_PSEUDO:
+            // Phase 2 needs the size to give a pseudo variable a stack slot
+            x86.pseudo_size[value.pseudo] = type_size(value.ty);
+            return operand_pseudo(value.pseudo);
+        case IR_VALUE_STATIC:
+            return operand_data(value.sym);
+        default:
+            return operand_pseudo(value.pseudo);
+    }
+}
+
+static asm_instr_t *
+instr_new(asm_instr_kind kind, asm_size size)
+{
+    asm_instr_t *instr = xcalloc(1, sizeof(asm_instr_t));
+    instr->kind = kind;
+    instr->size = size;
+
+    LIST_APPEND(&x86.fn->instrs, instr);
     return instr;
 }
 
-static struct asm_instr *make_mov(struct operand src, struct operand dst)
+static void
+emit_ret(void)
 {
-    struct asm_instr *instr = new_instr(ASM_MOV);
+    instr_new(ASM_INSTR_RET, ASM_QUADWORD);
+}
+
+static void
+emit_mov(asm_size size, asm_operand_t src, asm_operand_t dst)
+{
+    asm_instr_t *instr = instr_new(ASM_INSTR_MOV, size);
     instr->mov.src = src;
     instr->mov.dst = dst;
-    return instr;
 }
 
-static struct asm_instr *make_unary(enum asm_op op, struct operand dst)
+/* Sign extends 4 bytes to 8 */
+static void
+emit_movsx(asm_operand_t src, asm_operand_t dst)
 {
-    struct asm_instr *instr = new_instr(ASM_UNARY);
+    asm_instr_t *instr = instr_new(ASM_INSTR_MOVSX, ASM_QUADWORD);
+    instr->mov.src = src;
+    instr->mov.dst = dst;
+}
+
+static void
+emit_unary(asm_size size, asm_unary_op op, asm_operand_t dst)
+{
+    asm_instr_t *instr = instr_new(ASM_INSTR_UNARY, size);
     instr->unary.op = op;
-    instr->unary.oper = dst;
-    return instr;
+    instr->unary.dst = dst;
 }
 
-static struct asm_instr *make_binary(enum asm_op op, struct operand src,
-                                     struct operand dst)
+static void
+emit_binary(
+        asm_size size,
+        asm_binary_op op,
+        asm_operand_t src,
+        asm_operand_t dst)
 {
-    struct asm_instr *instr = new_instr(ASM_BINARY);
+    asm_instr_t *instr = instr_new(ASM_INSTR_BINARY, size);
     instr->binary.op = op;
     instr->binary.src = src;
     instr->binary.dst = dst;
-    return instr;
 }
 
-static struct asm_instr *make_cmp(struct operand oper1, struct operand oper2)
+/* Sets flags for dst - src */
+static void
+emit_cmp(asm_size size, asm_operand_t src, asm_operand_t dst)
 {
-    struct asm_instr *instr  = new_instr(ASM_CMP);
-    instr->cmp.lhs = oper1;
-    instr->cmp.rhs = oper2;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_CMP, size);
+    instr->cmp.src = src;
+    instr->cmp.dst = dst;
 }
 
-static struct asm_instr *make_idiv(struct operand oper)
+static void
+emit_idiv(asm_size size, asm_operand_t divisor)
 {
-    struct asm_instr *instr  = new_instr(ASM_IDIV);
-    instr->idiv.oper = oper;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_IDIV, size);
+    instr->idiv.divisor = divisor;
 }
 
-static struct asm_instr *make_jmp(int label_id)
+/* Sign extends %ax into %dx:%ax */
+static void
+emit_cdq(asm_size size)
 {
-    struct asm_instr *instr = new_instr(ASM_JMP);
-    instr->jmp.identifier = label_id;
-    return instr;
+    instr_new(ASM_INSTR_CDQ, size);
 }
 
-static struct asm_instr *make_jmpcc(enum cond_code code, int label_id)
+static void
+emit_jmp(ir_label_t target)
 {
-    struct asm_instr *instr = new_instr(ASM_JMPCC);
-    instr->jmpcc.code       = code;
-    instr->jmpcc.identifier = label_id;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_JMP, ASM_QUADWORD);
+    instr->jmp.target = target;
 }
 
-static struct asm_instr *make_setcc(enum cond_code code, struct operand oper)
+static void
+emit_jmpcc(asm_cond cond, ir_label_t target)
 {
-    struct asm_instr *instr = new_instr(ASM_SETCC);
-    instr->setcc.code = code;
-    instr->setcc.oper = oper;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_JMPCC, ASM_QUADWORD);
+    instr->jmpcc.cond = cond;
+    instr->jmpcc.target = target;
 }
 
-static struct asm_instr *make_label(int label_id)
+/* Writes only the low byte of dst */
+static void
+emit_setcc(asm_cond cond, asm_operand_t dst)
 {
-    struct asm_instr *instr = new_instr(ASM_LABEL);
-    instr->label.identifier = label_id;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_SETCC, ASM_BYTE);
+    instr->setcc.cond = cond;
+    instr->setcc.dst = dst;
 }
 
-static struct asm_instr *make_alloc_stack(int value)
+static void
+emit_label(ir_label_t label)
 {
-    struct asm_instr *instr = new_instr(ASM_ALLOCSTACK);
-    instr->allocate_stack.val = value;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_LABEL, ASM_QUADWORD);
+    instr->label.label = label;
 }
 
-static struct asm_instr *make_dealloc_stack(int value)
+/* x64 always pushes 8 bytes */
+static void
+emit_push(asm_operand_t src)
 {
-    struct asm_instr *instr = new_instr(ASM_DEALLOCSTACK);
-    instr->deallocate_stack.val = value;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_PUSH, ASM_QUADWORD);
+    instr->push.src = src;
 }
 
-static struct asm_instr *make_push(struct operand oper)
+static void
+emit_call(symbol_t *callee)
 {
-    struct asm_instr *instr = new_instr(ASM_PUSH);
-    instr->push.oper = oper;
-    return instr;
+    asm_instr_t *instr = instr_new(ASM_INSTR_CALL, ASM_QUADWORD);
+    instr->call.callee = callee;
 }
 
-static struct asm_instr *make_ret(void)   { return new_instr(ASM_RET); }
-static struct asm_instr *make_cdq(void)   { return new_instr(ASM_CDQ); }
+/* 
+ * Phase 1: Lower ir AST to asm AST
+ */
 
-static bool is_memory_operand(struct operand op)
+static void
+lower_unary(ir_instr_t *instr)
 {
-    return op.type == OPERAND_STACK || op.type == OPERAND_DATA;
+    ir_value_t src = instr->unary.src;
+    ir_value_t dst = instr->unary.dst;
+
+    if (instr->unary.op == IR_UNARY_LOG_NOT) {
+        // cmp $0, src
+        // mov $0, dst
+        // sete dst
+        emit_cmp(size_of(src.ty), operand_imm(0), operand_from_value(src));
+        emit_mov(size_of(dst.ty), operand_imm(0), operand_from_value(dst));
+        emit_setcc(COND_E, operand_from_value(dst));
+        return;
+    }
+
+    // mov src, dst
+    // op dst
+    emit_mov(size_of(dst.ty), operand_from_value(src), operand_from_value(dst));
+    emit_unary(
+            size_of(dst.ty),
+            convert_unary_op(instr->unary.op),
+            operand_from_value(dst));
 }
 
-// Convert 'ir_val' to ASM operand (immediate or pseudo)
-static struct operand convert_val(struct ir_value val)
+static void
+lower_binary(ir_instr_t *instr)
 {
-    if (val.kind == IR_VALUE_CONSTANT)
-        return make_imm(val.constant);
+    ir_value_t lhs = instr->binary.lhs;
+    ir_value_t rhs = instr->binary.rhs;
+    ir_value_t dst = instr->binary.dst;
+    ir_binary_op op = instr->binary.op;
 
-    if (val.kind == IR_VALUE_PSEUDO)
-        return make_pseudo(val.name);
+    switch (op) {
+        case IR_BINARY_DIV:
+        case IR_BINARY_REM: {
+            // idiv divides sign extended %dx:%ax (from cdq)
+            // the quotient goes to %ax and remainder goes to $dx
+            // mov lhs, %eax
+            // cdq
+            // idiv rhs
+            // mov %ax/%dx, dst
+            asm_size size = size_of(lhs.ty);
+            asm_reg result = op == IR_BINARY_DIV ? REG_AX : REG_DX;
+            emit_mov(size, operand_from_value(lhs), operand_reg(REG_AX));
+            emit_cdq(size);
+            emit_idiv(size, operand_from_value(rhs));
+            emit_mov(size, operand_reg(result), operand_from_value(dst));
+            break;
+        }
+        case IR_BINARY_EQ:
+        case IR_BINARY_NE:
+        case IR_BINARY_LT:
+        case IR_BINARY_LE:
+        case IR_BINARY_GT:
+        case IR_BINARY_GE:
+            // cmp rhs, lhs
+            // mov $0, dst
+            // setCC dst
+            emit_cmp(
+                    size_of(lhs.ty),
+                    operand_from_value(rhs),
+                    operand_from_value(lhs));
+            emit_mov(size_of(dst.ty), operand_imm(0), operand_from_value(dst));
+            emit_setcc(convert_cond(op), operand_from_value(dst));
+            return;
+        case IR_BINARY_SHL:
+        case IR_BINARY_SHR: {
+            // The shift count may be immediate or %cl
+            asm_size size = size_of(dst.ty);
+            asm_binary_op binop = convert_binary_op(op);
 
-    if (val.kind == IR_VALUE_STATIC)
-        return make_data(val.name);
+            emit_mov(size, operand_from_value(lhs), operand_from_value(dst));
 
-    return make_pseudo(val.name);
+            if (rhs.kind == IR_VALUE_CONSTANT) {
+                emit_binary(
+                        size,
+                        binop,
+                        operand_imm(rhs.constant),
+                        operand_from_value(dst));
+            } else {
+                emit_mov(size_of(rhs.ty), operand_from_value(rhs), operand_reg(REG_CX));
+                emit_binary(
+                        size,
+                        binop,
+                        operand_reg(REG_CX),
+                        operand_from_value(dst));
+            }
+            break;
+        }
+        default: {
+            // mov lhs, dst
+            // dst op= rhs
+            asm_size size = size_of(dst.ty);
+            emit_mov(size, operand_from_value(lhs), operand_from_value(dst));
+            emit_binary(size, convert_binary_op(op), operand_from_value(rhs), operand_from_value(dst));
+            break;
+        }
+    }
 }
 
-static void append_instr(struct asm_function *fn, struct asm_instr *instr)
+static void
+lower_cast(ir_instr_t *instr)
 {
-    if (!fn->last)
-        fn->first = instr;
-    else
-        fn->last->next = instr;
-    fn->last = instr;
+    ir_value_t src = instr->cast.src;
+    ir_value_t dst = instr->cast.dst;
+
+    if (type_size(dst.ty) > type_size(src.ty)) {
+        // int -> long
+        emit_movsx(operand_from_value(src), operand_from_value(dst));
+    } else {
+        // long -> int
+        emit_mov(ASM_LONGWORD, operand_from_value(src), operand_from_value(dst));
+    }
 }
 
-static void append_asm_static_var(struct asm_program *program, struct asm_static_variable *var)
+static void
+lower_call(ir_instr_t *instr)
 {
-    struct asm_static_variable **tail = &program->static_vars;
+    vector *args = &instr->call.args;
+    size_t reg_count = args->count < ARG_REG_COUNT ? args->count : ARG_REG_COUNT;
+    size_t stack_count = args->count - reg_count;
 
-    while (*tail)
-        tail = &(*tail)->next;
+    int padding = stack_count % 2 != 0 ? 8 : 0;
+    if (padding) {
+        emit_binary(ASM_QUADWORD, ASM_BINARY_SUB, operand_imm(padding), operand_reg(REG_SP));
+    }
 
-    *tail = var;
+    for (size_t i = args->count; i > ARG_REG_COUNT; i--) {
+        ir_value_t arg = *VECTOR_GET(args, ir_value_t, i - 1);
+        asm_operand_t src = operand_from_value(arg);
+
+        emit_push(src);
+    }
+
+    for (size_t i = 0; i < reg_count; i++) {
+        ir_value_t arg = *VECTOR_GET(args, ir_value_t, i);
+
+        emit_mov(size_of(arg.ty), operand_from_value(arg), operand_reg(arg_regs[i]));
+    }
+
+    emit_call(instr->call.callee);
+
+    int pushed = 8 * stack_count + padding;
+    if (pushed) {
+        emit_binary(
+                ASM_QUADWORD,
+                ASM_BINARY_ADD,
+                operand_imm(pushed),
+                operand_reg(REG_SP));
+    }
+
+    ir_value_t dst = instr->call.dst;
+    if (dst.kind != IR_VALUE_NONE) {
+        emit_mov(
+                size_of(dst.ty),
+                operand_reg(REG_AX),
+                operand_from_value(dst));
+    }
 }
 
-static struct asm_instr *replace_instr(struct asm_function *fn,
-        struct asm_instr *prev, struct asm_instr *curr,
-        struct asm_instr *first_new, struct asm_instr *last_new)
-{
-    last_new->next = curr->next;
-
-    if (prev)
-        prev->next = first_new;
-    else
-        fn->first = first_new;
-
-    if (fn->last == curr)
-        fn->last = last_new;
-
-    free(curr);
-    return last_new;
-}
-
-static void lower_ir_instr(struct asm_function *fn, struct ir_instr *instr)
+static void
+lower_ir_instr(ir_instr_t *instr)
 {
     switch (instr->kind) {
-        case IR_INSTR_RETURN: {
-            // return val -> movl val, %eax
-            if (instr->ret.has_value) {
-                struct operand src = convert_val(instr->ret.src);
-                append_instr(fn, make_mov(src, make_reg(REG_AX)));
+        case IR_INSTR_RETURN:
+            if (instr->ret.src.kind != IR_VALUE_NONE) {
+                emit_mov(
+                        size_of(instr->ret.src.ty),
+                        operand_from_value(instr->ret.src),
+                        operand_reg(REG_AX));
             }
 
-            append_instr(fn, make_ret());
+            emit_ret();
             break;
-        }
-        case IR_INSTR_CALL: {
-            int arg_count = instr->call.arg_count;
-
-            int stack_arg_count = 0;
-            if (arg_count > ARG_REG_COUNT)
-                stack_arg_count = arg_count - ARG_REG_COUNT;
-
-            /*
-             * Keep the stack 16-byte aligned before the call.
-             *
-             * At this point stack is 16-byte aligned.
-             * If we push uneven number of stack args (8 byte)
-             * align to 16 byte again.
-             */
-            int padding = 0;
-            if (stack_arg_count % 2 != 0)
-                padding = 8;
-
-            if (padding)
-                append_instr(fn, make_alloc_stack(padding));
-
-            // Push stack args right-to-left
-            for (int i = arg_count - 1; i >= ARG_REG_COUNT; i--) {
-                struct operand arg = convert_val(instr->call.args[i]);
-                append_instr(fn, make_push(arg));
-            }
-
-            for (int i = 0; i < arg_count && i < ARG_REG_COUNT; i++) {
-                struct operand arg = convert_val(instr->call.args[i]);
-                append_instr(fn, make_mov(arg, make_reg(arg_regs[i])));
-            }
-
-            struct asm_instr *call = new_instr(ASM_CALL);
-            call->call.identifier = instr->call.calle;
-            append_instr(fn, call);
-
-            int bytes_to_remove = 8 * stack_arg_count + padding;
-            if (bytes_to_remove)
-                append_instr(fn, make_dealloc_stack(bytes_to_remove));
-
-            if (instr->call.has_dst) {
-                struct operand dst = convert_val(instr->call.dst);
-                append_instr(fn, make_mov(make_reg(REG_AX), dst));
-            }
+        case IR_INSTR_UNARY:
+            lower_unary(instr);
             break;
-        }
-        case IR_INSTR_UNARY: {
-            struct operand src = convert_val(instr->unary.src);
-            struct operand dst = convert_val(instr->unary.dst);
-
-            if (instr->unary.op == IR_UNOP_LOG_NOT) {
-                /*
-                * Logical NOT: compare src to zero, set dst to the zero flag
-                * cmpl $0, src
-                * movl $0, dst
-                * sete dst
-                */
-                append_instr(fn, make_cmp(make_imm(0), src));
-                append_instr(fn, make_mov(make_imm(0), dst));
-                append_instr(fn, make_setcc(COND_E, dst));
-                break;
-            }
-
-            // Bitwise NOT, Arithmetic negation
-            // movl src, dst
-            // op dst
-            append_instr(fn, make_mov(src, dst));
-            append_instr(fn, make_unary(convert_unop(instr->unary.op), dst));
+        case IR_INSTR_BINARY:
+            lower_binary(instr);
             break;
-        }
-        case IR_INSTR_BINARY: {
-            struct operand src1 = convert_val(instr->binary.lhs);
-            struct operand src2 = convert_val(instr->binary.rhs);
-            struct operand dst = convert_val(instr->binary.dst);
-            enum ir_binary_op op = instr->binary.op;
+        case IR_INSTR_COPY:
+            ir_value_t dst = instr->copy.dst;
 
-            if (op == IR_BINOP_DIV || op == IR_BINOP_REM) {
-                /*
-                 * Signed division: x86 IDIV divides EDX:EAX by the operand
-                 * movl src1, %eax
-                 * cdq              <- sign extend EAX into EDX:EAX
-                 * idivl src2
-                 * movl %eax/%edx, dst (quotient/remainder)
-                 */
-                append_instr(fn, make_mov(src1, make_reg(REG_AX)));
-                append_instr(fn, make_cdq());
-                append_instr(fn, make_idiv(src2));
-                append_instr(fn, make_mov(make_reg(op == IR_BINOP_DIV ? REG_AX : REG_DX), dst));
-                break;
-            }
-
-            if (op == IR_BINOP_EQ || op == IR_BINOP_NE ||
-                op == IR_BINOP_LT || op == IR_BINOP_LE ||
-                op == IR_BINOP_GT || op == IR_BINOP_GE) {
-                /*
-                 * Compare, zero dest, then set
-                 * cmpl src2, src1
-                 * movl $0, dst
-                 * setcc dst
-                 */
-                append_instr(fn, make_cmp(src2, src1));
-                append_instr(fn, make_mov(make_imm(0), dst));
-                append_instr(fn, make_setcc(convert_to_cond(op), dst));
-                break;
-            }
-
-            if (op == IR_BINOP_BIT_AND ||
-                op == IR_BINOP_BIT_OR ||
-                op == IR_BINOP_BIT_XOR) {
-                /*
-                 * Bitwise ops route through %eax
-                 * movl src1, %eax
-                 * op src2, %eax
-                 * mov %eax, dst
-                 */
-                struct operand ax = make_reg(REG_AX);
-
-                append_instr(fn, make_mov(src1, ax));
-                append_instr(fn, make_binary(convert_binop(op), src2, ax));
-                append_instr(fn, make_mov(ax, dst));
-                break;
-            } 
-
-            if (op == IR_BINOP_SHL || op == IR_BINOP_SHR) {
-                // Shifts: count must be immediate or %cx
-                struct operand ax = make_reg(REG_AX);
-                struct operand count;
-
-                append_instr(fn, make_mov(src1, ax));
-
-                if (src2.type == OPERAND_IMM) {
-                    count = src2;
-                } else {
-                    append_instr(fn, make_mov(src2, make_reg(REG_CX)));
-                    count = make_reg(REG_CX);
-                }
-
-                append_instr(fn, make_binary(convert_binop(op), count, ax));
-                append_instr(fn, make_mov(ax, dst));
-                break;
-            }
-
-            // ADD, SUB, IMUL
-            // movl src1, dst
-            // op src2, dst
-            append_instr(fn, make_mov(src1, dst));
-            append_instr(fn, make_binary(convert_binop(op), src2, dst));
+            emit_mov(
+                    size_of(dst.ty),
+                    operand_from_value(instr->copy.src),
+                    operand_from_value(dst));
             break;
-        }
-        case IR_INSTR_JUMP_IF_ZERO: {
-            // if (!cond) goto label -> cmpl $0, val, je
-            struct operand val = convert_val(instr->jump_if_zero.cond);
+        case IR_INSTR_CAST:
+            lower_cast(instr);
+            break;
+        case IR_INSTR_JUMP:
+            emit_jmp(instr->jump.target);
+            break;
+        case IR_INSTR_JUMP_IF_ZERO:
+        case IR_INSTR_JUMP_IF_NOT_ZERO:
+            ir_value_t cond = instr->jump_cond.cond;
 
-            append_instr(fn, make_cmp(val, make_imm(0)));
-            append_instr(fn, make_jmpcc(COND_E, instr->jump_if_zero.label_id));
+            emit_cmp(size_of(cond.ty), operand_imm(0), operand_from_value(cond));
+            emit_jmpcc(
+                    instr->kind == IR_INSTR_JUMP_IF_ZERO ? COND_E : COND_NE,
+                    instr->jump_cond.target);
             break;
-        }
-        case IR_INSTR_JUMP_IF_NOT_ZERO: {
-            // if (cond) goto label -> cmpl $0, val, jne
-            struct operand val = convert_val(instr->jump_if_not_zero.cond);
-
-            append_instr(fn, make_cmp(val, make_imm(0)));
-            append_instr(fn, make_jmpcc(COND_NE, instr->jump_if_not_zero.label_id));
+        case IR_INSTR_CALL:
+            lower_call(instr);
             break;
-        }
-        case IR_INSTR_JUMP: {
-            append_instr(fn, make_jmp(instr->jump.label_id));
+        case IR_INSTR_LABEL:
+            emit_label(instr->label.label);
             break;
-        }
-        case IR_INSTR_COPY: {
-            struct operand src = convert_val(instr->copy.src);
-            struct operand dst = convert_val(instr->copy.dst);
-
-            append_instr(fn, make_mov(src, dst));
-            break;
-        }
-        case IR_INSTR_LABEL: {
-            append_instr(fn, make_label(instr->label.label_id));
-            break;
-        }
     }
 }
 
-static void lower_ir_params(struct asm_function *asm_fn, struct ir_function *ir_fn)
+static void
+lower_params(ir_function_t *ir_fn)
 {
-    int i = 0;
-    for (struct ir_param *param = ir_fn->params; param; param = param->next) {
-        struct operand dst = make_pseudo(param->name);
-        struct operand src;
+    for (size_t i = 0; i < ir_fn->params.count; i++)  {
+        ir_value_t param = *VECTOR_GET(&ir_fn->params, ir_value_t, i);
+        asm_operand_t src;
 
         if (i < ARG_REG_COUNT) {
-            src = make_reg(arg_regs[i]);
+            src = operand_reg(arg_regs[i]);
         } else {
-            /*
-             * Stack args:
-             *
-             * 8(%rbp) is return address of calle, so:
-             *  16(%rbp) = 7th integer argument
-             *  24(&rbp) = 8th...
-             */
-            int stack_offset = 16 + 8 * (i - ARG_REG_COUNT);
-            src = make_stack(stack_offset);
+            // Rest of args passed on stack
+            src = operand_stack(16 + 8 * (int32_t)(i - ARG_REG_COUNT));
         }
 
-        append_instr(asm_fn, make_mov(src, dst));
-        i++;
+        emit_mov(size_of(param.ty), src, operand_from_value(param));
     }
 }
 
-static struct asm_function *lower_ir_function(struct ir_function *ir_fn)
+static asm_function_t *
+lower_ir_function(ir_function_t *ir_fn)
 {
-    struct asm_function *asm_fn = calloc(1, sizeof(struct asm_function));
-    asm_fn->name = ir_fn->name;
+    asm_function_t *function = xcalloc(1, sizeof(asm_function_t));
+    function->sym = ir_fn->sym;
 
-    if (ir_fn->linkage == LINK_EXTERNAL)
-        asm_fn->global = true;
-    else
-        asm_fn->global = false;
+    x86.fn = function;
 
-    lower_ir_params(asm_fn, ir_fn);
+    lower_params(ir_fn);
 
-    for (struct ir_instr *i = ir_fn->first; i != NULL; i = i->next) {
-        lower_ir_instr(asm_fn, i);
+    LIST_FOREACH(ir_instr, &ir_fn->instrs) {
+        lower_ir_instr(ir_instr);
     }
 
-    return asm_fn;
+    x86.fn = nullptr;
+
+    return function;
 }
 
-static struct asm_static_variable *lower_ir_static_variable(struct ir_static_variable *ir_var)
+static asm_program_t *
+lower_ir_program(ir_program_t *ir_program)
 {
-    struct asm_static_variable *asm_var = calloc(1, sizeof(*asm_var));
+    asm_program_t *program = xcalloc(1, sizeof(asm_program_t));
+    program->sema = ir_program->sema;
 
-    asm_var->name = ir_var->name;
-    asm_var->global = ir_var->linkage == LINK_EXTERNAL;
-    asm_var->init = ir_var->init;
+    x86.pseudo_size = xcalloc(ir_program->pseudo_count, sizeof(int));
+    x86.pseudo_offset = xcalloc(ir_program->pseudo_count, sizeof(int));
 
-    return asm_var;
-}
-
-static struct asm_program *lower_ir_program(struct ir_program *ir)
-{
-    struct asm_program *program = calloc(1, sizeof(struct asm_program));
-
-    struct asm_function *head = NULL;
-    struct asm_function *tail = NULL;
-
-    for (struct ir_static_variable *v = ir->static_vars; v; v = v->next) {
-        struct asm_static_variable *asm_var = lower_ir_static_variable(v);
-        append_asm_static_var(program, asm_var);
+    LIST_FOREACH(ir_fn, &ir_program->fns) {
+        asm_function_t *asm_fn = lower_ir_function(ir_fn);
+        LIST_APPEND(&program->fns, asm_fn);
     }
-
-    for (struct ir_function *ir_fn = ir->functions; ir_fn; ir_fn = ir_fn->next) {
-        struct asm_function *asm_fn = lower_ir_function(ir_fn);
-
-        if (!head)
-            head = asm_fn;
-        else
-            tail->next = asm_fn;
-        tail = asm_fn;
-    }
-
-    program->functions = head;
 
     return program;
 }
 
-/* Phase 2: Replace pseduo operands with RBP-relative stack slots */
-struct pseudo_entry {
-    const char *name; // Pseudo from IR
-    int stack_offset; // Negative offset from %rbp
-};
+/*
+ * Phase 2: Replace pseudo variables with stack slots
+ */
 
-struct pseudo_map {
-    hash_map entries;
-    int current_offset;
-};
-
-static int pseudo_map_get_or_insert(struct pseudo_map *pm, const char *name)
+static void
+replace_pseudo(asm_operand_t *oper)
 {
-    struct pseudo_entry *entry = hashmap_get(&pm->entries, name, strlen(name));
-    if (entry)
-        return entry->stack_offset;
-
-    pm->current_offset -= STACK_SLOT_SIZE;
-
-    entry = malloc(sizeof(struct pseudo_entry));
-    entry->name = name;
-    entry->stack_offset = pm->current_offset;
-
-    hashmap_set(&pm->entries, name, strlen(name), entry);
-
-    return pm->current_offset;
-}
-
-static void replace_pseudo(struct operand *oper, struct pseudo_map *pm)
-{
-    if (oper->type != OPERAND_PSEUDO)
+    if (oper->kind != OPERAND_PSEUDO)
         return;
 
-    int offset = pseudo_map_get_or_insert(pm, oper->pseudo);
-    oper->type  = OPERAND_STACK;
-    oper->stack = offset;
+    int id = oper->pseudo;
+
+    // 0 means empty slot
+    // First use: take the next slot aligned to pseudos own size
+    if (x86.pseudo_offset[id] == 0) {
+        int size = x86.pseudo_size[id];
+
+        x86.frame_size += size;
+        x86.frame_size = (x86.frame_size + size - 1) / size * size;
+        x86.pseudo_offset[id] = -x86.frame_size;
+    }
+
+    *oper = operand_stack(x86.pseudo_offset[id]);
 }
 
-/*
- * Replace every pseudo variable with a stack operand.
- */
-static int assign_stack_slots(struct asm_function *fn)
+static void
+assign_stack_slots(asm_function_t *fn)
 {
-    struct pseudo_map pm = {0};
-    hashmap_init(&pm.entries);
+    x86.frame_size = 0;
 
-    for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {
-        switch (instr->type) {
-            case ASM_MOV:
-                replace_pseudo(&instr->mov.src, &pm);
-                replace_pseudo(&instr->mov.dst, &pm);
+    LIST_FOREACH(instr, &fn->instrs) {
+        switch (instr->kind) {
+            case ASM_INSTR_MOV:
+            case ASM_INSTR_MOVSX:
+                replace_pseudo(&instr->mov.src);
+                replace_pseudo(&instr->mov.dst);
                 break;
-            case ASM_UNARY:
-                replace_pseudo(&instr->unary.oper, &pm);
+            case ASM_INSTR_UNARY:
+                replace_pseudo(&instr->unary.dst);
                 break;
-            case ASM_BINARY:
-                replace_pseudo(&instr->binary.src, &pm);
-                replace_pseudo(&instr->binary.dst, &pm);
+            case ASM_INSTR_BINARY:
+                replace_pseudo(&instr->binary.src);
+                replace_pseudo(&instr->binary.dst);
                 break;
-            case ASM_SETCC:
-                replace_pseudo(&instr->setcc.oper, &pm);
+            case ASM_INSTR_CMP:
+                replace_pseudo(&instr->cmp.src);
+                replace_pseudo(&instr->cmp.dst);
                 break;
-            case ASM_IDIV:
-                replace_pseudo(&instr->idiv.oper, &pm);
+            case ASM_INSTR_IDIV:
+                replace_pseudo(&instr->idiv.divisor);
                 break;
-            case ASM_CMP:
-                replace_pseudo(&instr->cmp.lhs, &pm);
-                replace_pseudo(&instr->cmp.rhs, &pm);
+            case ASM_INSTR_SETCC:
+                replace_pseudo(&instr->setcc.dst);
                 break;
-            case ASM_PUSH:
-                replace_pseudo(&instr->push.oper, &pm);
+            case ASM_INSTR_PUSH:
+                replace_pseudo(&instr->push.src);
+                break;
             default:
                 break;
         }
     }
 
-    int raw_size = -pm.current_offset;
-    hashmap_free(&pm.entries);
-
-    return raw_size;
+    // %rsp must be aligned to 16 bytes
+    fn->stack_size = (x86.frame_size + 15) / 16 * 16;
 }
 
-static int align_to(int value, int align)
-{
-    return (value + (align - 1)) / align * align;
-}
-
-static void asm_phase2(struct asm_program *program)
-{
-    for (struct asm_function *fn = program->functions; fn; fn = fn->next) {
-        int stack_size = assign_stack_slots(fn);
-
-        /*
-         * Keep the stack frame 16 byte aligned.
-         * System-V ABI.
-         */
-        fn->stack_size = align_to(stack_size, 16);
-    }
-}
-
-
-/* Phase 3: Fix illegal operator-operator combos */
 /*
- * x86 contrains addressed here:
- * MOV mem, mem -> MOV mem, %r10d / MOV %r10d, mem
- * IMUL src, mem -> MOV mem, %r11d / IMUL src, %r11d / MOV %r11d, mem
- * <op> mem, mem -> MOV src, %r10d / <op> %r10d, dst
- * SHIFT mem, dst -> MOV src, %ecx / SHIFT %cl, dst
- * IDIV $imm -> MOV $imm, %r10d / IDIV %r10d
- * CMP mem, mem -> MOV oper1, %r10d / CMP %r10d, oper2
- * CMP oper1, $imm -> MOV $imm, %r11d / CMP oper1, %r11d
+ * Phase 3: Replace illegal operator-operator combos
  */
-static void asm_phase3(struct asm_function *fn)
+
+bool 
+is_memory_operand(asm_operand_t oper)
 {
-    /*
-     * Insert stack allocation for function prologue.
-     * Stack size calculated in phase 2.
-     */
-    if (fn->stack_size > 0) {
-        struct asm_instr *instr = make_alloc_stack(fn->stack_size);
+    return oper.kind == OPERAND_STACK ||
+        oper.kind == OPERAND_DATA;
+}
 
-        instr->next = fn->first;
-        fn->first = instr;
+bool
+is_large_imm(asm_operand_t oper)
+{
+    return oper.kind == OPERAND_IMM &&
+        (oper.imm > INT32_MAX || oper.imm < INT32_MIN);
+}
 
-        if (!fn->last)
-            fn->last = instr;
+static void
+fixup_mov(asm_instr_t *instr)
+{
+    asm_size size = instr->size;
+    asm_operand_t src = instr->mov.src;
+    asm_operand_t dst = instr->mov.dst;
+    asm_operand_t r10 = operand_reg(REG_R10);
+
+    if (size == ASM_LONGWORD && src.kind == OPERAND_IMM)
+        src.imm = (int32_t)src.imm;
+
+    // No memory-to-memory, or 64bit imm to memory
+    if ((is_memory_operand(src) && is_memory_operand(dst)) ||
+            is_large_imm(src)) {
+        emit_mov(size, src, r10);
+        emit_mov(size, r10, dst);
+        return;
     }
+
+    emit_mov(size, src, dst);
+}
+
+static void
+fixup_movsx(asm_instr_t *instr)
+{
+    asm_operand_t src = instr->mov.src;
+    asm_operand_t dst = instr->mov.dst;
+    asm_operand_t r10 = operand_reg(REG_R10);
+    asm_operand_t r11 = operand_reg(REG_R11);
+
+    // Source can't be immediate
+    if (src.kind == OPERAND_IMM) {
+        emit_mov(ASM_LONGWORD, src, r10);
+        src = r10;
+    }
+
+    // Destination must be register
+    if (is_memory_operand(dst)) {
+        emit_movsx(src, r11);
+        emit_mov(ASM_QUADWORD, r11, dst);
+        return;
+    }
+
+    emit_movsx(src, dst);
+}
+
+static void
+fixup_binary(asm_instr_t *instr)
+{
+    asm_size size = instr->size;
+    asm_binary_op op = instr->binary.op;
+    asm_operand_t src = instr->binary.src;
+    asm_operand_t dst = instr->binary.dst;
+    asm_operand_t r10 = operand_reg(REG_R10);
+    asm_operand_t r11 = operand_reg(REG_R11);
+
+    // No instruction takes two memory operands
+    if (is_memory_operand(src) && is_memory_operand(dst)) {
+        emit_mov(size, src, r10);
+        src = r10;
+    }
+
+    // An immediate that doesn't fit 32 bits must be in register
+    if (is_large_imm(src)) {
+        emit_mov(size, src, r10);
+        src = r10;
+    }
+
+    // imul can't write to memory
+    if (op == ASM_BINARY_IMUL && is_memory_operand(dst)) {
+        emit_mov(size, dst, r11);
+        emit_binary(size, op, src, r11);
+        emit_mov(size, r11, dst);
+        return;
+    }
+
+    emit_binary(size, op, src, dst);
+}
+
+static void
+fixup_idiv(asm_instr_t *instr)
+{
+    asm_size size = instr->size;
+    asm_operand_t divisor = instr->idiv.divisor;
     
-    struct operand r10 = make_reg(REG_R10);
-    struct operand r11 = make_reg(REG_R11);
-    struct operand cx = make_reg(REG_CX);
-
-    struct asm_instr *prev = NULL;
-    struct asm_instr *curr = fn->first;
-    while (curr) {
-        switch (curr->type) {
-            case ASM_MOV: {
-                // mov mem, mem -> movl mem, r10d / movl r10d, mem
-                bool src_mem = is_memory_operand(curr->mov.src);
-                bool dst_mem = is_memory_operand(curr->mov.dst);
-
-                if (src_mem && dst_mem) {
-                    struct asm_instr *a = make_mov(curr->mov.src, r10);
-                    struct asm_instr *b = make_mov(r10, curr->mov.dst);
-                    a->next = b;
-                    curr = replace_instr(fn, prev, curr, a, b);
-                }
-
-                break;
-            }
-            case ASM_BINARY: {
-                bool src_mem = is_memory_operand(curr->binary.src);
-                bool dst_mem = is_memory_operand(curr->binary.dst);
-                bool is_mul = curr->binary.op == ASM_IMUL;
-                bool is_shift = curr->binary.op == ASM_SHL || curr->binary.op == ASM_SHR;
-
-                if (is_mul && dst_mem) {
-                    // imull src, mem  ->  movl mem, r11d / imull src, r11d / movl r11d, mem
-                    struct asm_instr *a = make_mov(curr->binary.dst, r11);
-                    struct asm_instr *b = make_binary(ASM_IMUL, curr->binary.src, r11);
-                    struct asm_instr *c = make_mov(r11, curr->binary.dst);
-                    a->next = b; b->next = c;
-                    curr = replace_instr(fn, prev, curr, a, c);
-                } else if (!is_mul && src_mem && dst_mem) {
-                    // op mem, mem  ->  movl src, r10d / op r10d, dst
-                    struct asm_instr *a = make_mov(curr->binary.src, r10);
-                    struct asm_instr *b = make_binary(curr->binary.op, r10, curr->binary.dst);
-                    a->next = b;
-                    curr = replace_instr(fn, prev, curr, a, b);
-                } else if (is_shift && src_mem) {
-                    // shll mem, dst -> movl mem, %ecx / shll %cl, dst
-                    struct asm_instr *a = make_mov(curr->binary.src, cx);
-                    struct asm_instr *b  = make_binary(curr->binary.op,
-                                                        cx,
-                                                        curr->binary.dst);
-                    a->next = b;
-                    curr = replace_instr(fn, prev, curr, a, b);
-                }
-                break;
-            }
-            case ASM_IDIV: {
-                // idiv $imm -> movl $imm, %r10d / idiv %r10d
-                if (curr->idiv.oper.type != OPERAND_IMM) break;
-
-                struct asm_instr *a = make_mov(curr->idiv.oper, r10);
-                struct asm_instr *b = make_idiv(r10);
-                a->next = b;
-                curr = replace_instr(fn, prev, curr, a, b);
-                break;
-            }
-            case ASM_CMP: {
-                if (is_memory_operand(curr->cmp.lhs) &&
-                    is_memory_operand(curr->cmp.rhs)) {
-                    struct asm_instr *a = make_mov(curr->cmp.lhs, r10);
-                    struct asm_instr *b = make_cmp(r10, curr->cmp.rhs);
-                    a->next = b;
-                    curr = replace_instr(fn, prev, curr, a, b);
-                } else if (curr->cmp.rhs.type == OPERAND_IMM) {
-                    struct asm_instr *a = make_mov(curr->cmp.rhs, r11);
-                    struct asm_instr *b = make_cmp(curr->cmp.lhs, r11);
-                    a->next = b;
-                    curr = replace_instr(fn, prev, curr, a, b);
-                }
-                break;
-            }
-            
-            case ASM_PUSH: {
-                if (is_memory_operand(curr->push.oper)) {
-                    struct asm_instr *a = make_mov(curr->push.oper, r10);
-                    struct asm_instr *b = make_push(r10);
-
-                    a->next = b;
-                    curr = replace_instr(fn, prev, curr, a, b);
-                }
-                break;
-            }
-            default:
-                break;
-        }
-        prev = curr;
-        curr = curr->next;
+    // Can't idiv $imm
+    if (divisor.kind == OPERAND_IMM) {
+        emit_mov(instr->size, instr->idiv.divisor, operand_reg(REG_R10));
+        divisor = operand_reg(REG_R10);
     }
+
+    emit_idiv(size, divisor);
 }
 
-static const char *reg_name_8(enum reg r)
+static void
+fixup_cmp(asm_instr_t *instr)
 {
-    switch (r) {
-        case REG_AX:  return "al";
-        case REG_CX:  return "cl";
-        case REG_DX:  return "dl";
-        case REG_DI:  return "dil";
-        case REG_SI:  return "sil";
-        case REG_R8: return  "r8b";
-        case REG_R9: return  "r9b";
-        case REG_R10: return "r10b";
-        case REG_R11: return "r11b";
-        default:      return "unknown";
+    asm_size size = instr->size;
+    asm_operand_t src = instr->cmp.src;
+    asm_operand_t dst = instr->cmp.dst;
+    asm_operand_t r10 = operand_reg(REG_R10);
+    asm_operand_t r11 = operand_reg(REG_R11);
+
+    if ((is_memory_operand(src) && is_memory_operand(dst)) ||
+            is_large_imm(src)) {
+        emit_mov(size, src, r10);
+        src = r10;
     }
+
+    // Second operand can't be immediate
+    if (dst.kind == OPERAND_IMM) {
+        emit_mov(size, dst, r11);
+        dst = r11;
+    }
+
+    emit_cmp(size, src, dst);
 }
 
-static const char *reg_name_32(enum reg r)
+static void
+fixup_push(asm_instr_t *instr)
 {
-    switch (r) {
-        case REG_AX:  return "eax";
-        case REG_CX:  return "ecx";
-        case REG_DX:  return "edx";
-        case REG_DI:  return "edi";
-        case REG_SI:  return "esi";
-        case REG_R8:  return  "r8d";
-        case REG_R9:  return  "r9d";
-        case REG_R10: return "r10d";
-        case REG_R11: return "r11d";
-        default:      return "unknown";
+    asm_operand_t src = instr->push.src;
+    asm_operand_t r10 = operand_reg(REG_R10);
+
+    if (is_large_imm(src)) {
+        emit_mov(instr->size, src, operand_reg(REG_R10));
+        src = r10;
     }
+
+    emit_push(src);
 }
 
-static const char *reg_name_64(enum reg r)
+static void
+fixup_instr(asm_instr_t *instr)
 {
-    switch (r) {
-        case REG_AX:  return "rax";
-        case REG_CX:  return "rcx";
-        case REG_DX:  return "rdx";
-        case REG_DI:  return "rdi";
-        case REG_SI:  return "rsi";
-        case REG_R8:  return  "r8";
-        case REG_R9:  return  "r9";
-        case REG_R10: return "r10";
-        case REG_R11: return "r11";
-        default:      return "unknown";
-    }
-}
-
-static const char *cond_suffix(enum cond_code c)
-{
-    switch (c) {
-        case COND_E:  return "e";
-        case COND_NE: return "ne";
-        case COND_L:  return "l";
-        case COND_LE: return "le";
-        case COND_G:  return "g";
-        case COND_GE: return "ge";
-        default:      return "unknown";
-    }
-}
-
-static const char *asm_op_str(enum asm_op op)
-{
-    switch (op) {
-        case ASM_ADD:  return "addl";
-        case ASM_SUB:  return "subl";
-        case ASM_IMUL: return "imull";
-        case ASM_AND:  return "andl";
-        case ASM_OR:   return "orl";
-        case ASM_XOR:  return "xorl";
-        case ASM_SHL:  return "shll";
-        case ASM_SHR:  return "sarl";
-        case ASM_NEG:  return "negl";
-        case ASM_NOT:  return "notl";
-        default:       return "???";
-    }
-}
-
-static void write_operand(FILE *file, struct operand op, int reg_size)
-{
-    switch (op.type) {
-        case OPERAND_REG:
-            if (reg_size == 8)
-                fprintf(file, "%%%s", reg_name_8(op.reg));
-            else if (reg_size == 32)
-                fprintf(file, "%%%s", reg_name_32(op.reg));
-            else if (reg_size == 64)
-                fprintf(file, "%%%s", reg_name_64(op.reg));
+    switch (instr->kind) {
+        case ASM_INSTR_MOV:
+            fixup_mov(instr);
             break;
-        case OPERAND_STACK:
-            fprintf(file, "%d(%%rbp)", op.stack);
+        case ASM_INSTR_MOVSX:
+            fixup_movsx(instr);
             break;
-        case OPERAND_IMM:
-            fprintf(file, "$%d", op.imm);
+        case ASM_INSTR_BINARY:
+            fixup_binary(instr);
             break;
-        case OPERAND_DATA:
-            fprintf(file, "%s(%%rip)", op.data);
+        case ASM_INSTR_IDIV:
+            fixup_idiv(instr);
+            break;
+        case ASM_INSTR_CMP:
+            fixup_cmp(instr);
+            break;
+        case ASM_INSTR_PUSH:
+            fixup_push(instr);
             break;
         default:
+            // Jumps, labels, call, ret, cdq, setcc, unary: always valid
+            LIST_APPEND(&x86.fn->instrs, instr);
             break;
     }
 }
 
-static void emit_static_variable(struct asm_static_variable *var, FILE *file)
+static void
+fixup_function(asm_function_t *fn)
 {
-    if (var->global)
-        fprintf(file, "    .globl %s\n", var->name);
+    typeof(fn->instrs) old = fn->instrs; // Set the old list aside
+    LIST_INIT(&fn->instrs);
 
-    if (var->init == 0) {
-        fprintf(file, "    .bss\n");
-        fprintf(file, "    .align 4\n");
-        fprintf(file, "%s:\n", var->name);
-        fprintf(file, "    .zero 4\n");
-    } else {
-        fprintf(file, "    .data\n");
-        fprintf(file, "    .align 4\n");
-        fprintf(file, "%s:\n", var->name);
-        fprintf(file, "    .long %lu\n", var->init);
+    x86.fn = fn;
+
+    for (asm_instr_t *instr = old.head, *next; instr; instr = next) {
+        next = instr->next;
+        fixup_instr(instr);
+    }
+
+    x86.fn = nullptr;
+}
+
+/*
+ * Phase 4: Write asembly to file
+ */
+
+// quadword, longword, word, byte, high byte
+static const char *reg_names[][5] = {
+#define X(name, q, l, w, b, h) [name] = { q, l, w, b, h },
+    ASM_REG_LIST
+#undef X
+};
+
+static const char *cond_suffixes[] = {
+#define X(name, suffix) [name] = suffix,
+    ASM_COND_LIST
+#undef X
+};
+
+static const char *unary_names[] = {
+#define X(name, str) [name] = str,
+    ASM_UNARY_OP_LIST
+#undef X
+};
+
+static const char *binary_names[] = {
+#define X(name, str) [name] = str,
+    ASM_BINARY_OP_LIST
+#undef X
+};
+
+static const char *
+reg_name(asm_reg reg, asm_size size)
+{
+    switch (size) {
+        case ASM_BYTE:
+            return reg_names[reg][3];
+        case ASM_WORD:
+            return reg_names[reg][2];
+        case ASM_LONGWORD:
+            return reg_names[reg][1];
+        case ASM_QUADWORD:
+            return reg_names[reg][0];
     }
 }
 
-static void emit_function(struct asm_function *fn, FILE *file)
+static char
+size_suffix(asm_size size)
 {
-    if (fn->global)
-        fprintf(file, "    .globl %s\n", fn->name);
-    fprintf(file, "    .text\n");
-    fprintf(file, "%s:\n", fn->name);
-    fprintf(file, "    pushq    %%rbp\n");
-    fprintf(file, "    movq     %%rsp, %%rbp\n");
+    return size == ASM_QUADWORD ? 'q' : 'l';
+}
 
-    for (struct asm_instr *instr = fn->first; instr; instr = instr->next) {
-        switch (instr->type) {
-            case ASM_ALLOCSTACK:
-                fprintf(file, "    subq     $%d, %%rsp\n", instr->allocate_stack.val);
-                break;
-            case ASM_DEALLOCSTACK:
-                fprintf(file, "    addq     $%d, %%rsp\n", instr->deallocate_stack.val);
-                break;
-            case ASM_PUSH:
-                fprintf(file, "    pushq    ");
-                write_operand(file, instr->push.oper, 64);
-                fprintf(file, "\n");
-                break;
-            case ASM_CALL:
-                // TODO: Add @PLT
-                fprintf(file, "    call     %s\n", instr->call.identifier);
-                break;
-            case ASM_CDQ:
-                fprintf(file, "    cdq\n");
-                break;
-            case ASM_MOV:
-                fprintf(file, "    movl     ");
-                write_operand(file, instr->mov.src, 32);
-                fprintf(file, ", ");
-                write_operand(file, instr->mov.dst, 32);
-                fprintf(file, "\n");
-                break;
-            case ASM_UNARY:
-                fprintf(file, "    %s     ", asm_op_str(instr->unary.op));
-                write_operand(file, instr->unary.oper, 32);
-                fprintf(file, "\n");
-                break;
-            case ASM_BINARY: {
-                bool is_shift = instr->binary.op == ASM_SHL || instr->binary.op == ASM_SHR;
-                bool is_reg = instr->binary.src.type == OPERAND_REG;
-                fprintf(file, "    %s     ", asm_op_str(instr->binary.op));
-                write_operand(file, instr->binary.src, is_shift && is_reg ? 8 : 32);
-                fprintf(file, ", ");
-                write_operand(file, instr->binary.dst, 32);
-                fprintf(file, "\n");
-                break;
-            }
-            case ASM_IDIV:
-                fprintf(file, "    idivl    ");
-                write_operand(file, instr->idiv.oper, 32);
-                fprintf(file, "\n");
-                break;
-            case ASM_RET:
-                fprintf(file, "    movq     %%rbp, %%rsp\n");
-                fprintf(file, "    popq     %%rbp\n");
-                fprintf(file, "    ret\n");
-                break;
-            case ASM_CMP:
-                fprintf(file, "    cmpl     ");
-                write_operand(file, instr->cmp.lhs, 32);
-                fprintf(file, ", ");
-                write_operand(file, instr->cmp.rhs, 32);
-                fprintf(file, "\n");
-                break;
-            case ASM_JMP: {
-                char l[10];
-                sprintf(l, ".L%d", instr->jmp.identifier);
-                fprintf(file, "    jmp    %s\n", l);
-                break;
-            }
-            case ASM_JMPCC: {
-                char l[10];
-                sprintf(l, ".L%d", instr->jmpcc.identifier);
-                fprintf(file, "    j%s    %s\n", cond_suffix(instr->jmpcc.code), l);
-                break;
-            }
-            case ASM_SETCC:
-                fprintf(file, "    set%s    ", cond_suffix(instr->setcc.code));
-                write_operand(file, instr->setcc.oper, 8);
-                fprintf(file, "\n");
-                break;
-            case ASM_LABEL: {
-                char l[10];
-                sprintf(l, ".L%d", instr->label.identifier);
-                fprintf(file, "%s:\n", l);
-                break;
-            }
+static void
+write_symbol_name(symbol_t *symbol, FILE *out)
+{
+    fprintf(out, "%.*s", (int)symbol->name.len, symbol->name.start);
+
+    if (symbol->linkage == LINKAGE_NONE)
+        fprintf(out, ".%zu", (size_t)symbol->id);
+}
+
+static void
+write_operand(asm_operand_t oper, asm_size size, FILE *out)
+{
+    switch (oper.kind) {
+        case OPERAND_IMM:
+            fprintf(out, "$%ld", oper.imm);
+            break;
+        case OPERAND_STACK:
+            fprintf(out, "%d(%%rbp)", oper.stack);
+            break;
+        case OPERAND_DATA:
+            write_symbol_name(oper.data, out);
+            fprintf(out, "(%%rip)");
+            break;
+        case OPERAND_REG:
+            fprintf(out, "%%%s", reg_name(oper.reg, size));
+            break;
+        case OPERAND_PSEUDO:
+            // Already substituted in phase 2
+            break;
+    }
+}
+
+static void
+write_label(ir_label_t label, FILE *out)
+{
+    static const char kinds[] = {
+        [IR_LABEL_TEMP] = 't',
+        [IR_LABEL_CASE] = 's',
+        [IR_LABEL_CONTINUE] = 'c',
+        [IR_LABEL_BREAK] = 'b',
+        [IR_LABEL_USER] = 'u',
+    };
+
+    fprintf(out, ".L%c%u", kinds[label.kind], label.id);
+}
+
+static void
+write_instr(asm_instr_t *instr, FILE *out)
+{
+    asm_size size = instr->size;
+
+    switch (instr->kind) {
+        case ASM_INSTR_MOV:
+            fprintf(out, "\tmov%c ", size_suffix(size));
+            write_operand(instr->mov.src, size, out);
+            fprintf(out, ", ");
+            write_operand(instr->mov.dst, size, out);
+            break;
+        case ASM_INSTR_MOVSX:
+            fprintf(out, "\tmovslq ");
+            write_operand(instr->mov.src, ASM_LONGWORD, out);
+            fprintf(out, ", ");
+            write_operand(instr->mov.dst, ASM_QUADWORD, out);
+            break;
+        case ASM_INSTR_UNARY:
+            fprintf(out, "\t%s%c ",
+                    unary_names[instr->unary.op],
+                    size_suffix(instr->size));
+            write_operand(instr->unary.dst, size, out);
+            break;
+        case ASM_INSTR_BINARY: {
+            asm_binary_op op = instr->binary.op;
+            asm_operand_t src = instr->binary.src;
+
+            bool count_in_reg =
+                (op == ASM_BINARY_SAL || op == ASM_BINARY_SAR) &&
+                src.kind == OPERAND_REG;
+            
+            fprintf(out, "\t%s%c ", binary_names[op], size_suffix(size));
+            write_operand(src, count_in_reg ? ASM_BYTE : size, out);
+            fprintf(out, ", ");
+            write_operand(instr->binary.dst, size, out);
+            break;
         }
+        case ASM_INSTR_CMP:
+            fprintf(out, "\tcmp%c ", size_suffix(size));
+            write_operand(instr->cmp.src, size, out);
+            fprintf(out, ", ");
+            write_operand(instr->cmp.dst, size, out);
+            break;
+        case ASM_INSTR_IDIV:
+            fprintf(out, "\tidiv%c ", size_suffix(size));
+            write_operand(instr->idiv.divisor, size, out);
+            break;
+        case ASM_INSTR_CDQ:
+            fprintf(out, size == ASM_QUADWORD ? "\tcqo" : "\tcdq");
+            break;
+        case ASM_INSTR_JMP:
+            fprintf(out, "\tjmp ");
+            write_label(instr->jmp.target, out);
+            break;
+        case ASM_INSTR_JMPCC:
+            fprintf(out, "\tj%s ", cond_suffixes[instr->jmpcc.cond]);
+            write_label(instr->jmpcc.target, out);
+            break;
+        case ASM_INSTR_SETCC:
+            fprintf(out, "\tset%s ", cond_suffixes[instr->setcc.cond]);
+            write_operand(instr->setcc.dst, size, out);
+            break;
+        case ASM_INSTR_LABEL:
+            write_label(instr->label.label, out);
+            fprintf(out, ":");
+            break;
+        case ASM_INSTR_PUSH:
+            fprintf(out, "\tpushq ");
+            write_operand(instr->push.src, size, out);
+            break;
+        case ASM_INSTR_CALL:
+            fprintf(out, "\tcall ");
+            write_symbol_name(instr->call.callee, out);
+
+            if (!instr->call.callee->defined)
+                fprintf(out, "@PLT");
+            break;
+        case ASM_INSTR_RET:
+            fprintf(out, "\tmovq %%rbp, %%rsp\n");
+            fprintf(out, "\tpopq %%rbp\n");
+            fprintf(out, "\tret");
+    }
+
+    fprintf(out, "\n");
+}
+
+static void
+write_function(asm_function_t *fn, FILE *out)
+{
+    if (fn->sym->linkage == LINKAGE_EXTERNAL) {
+        fprintf(out, "\t.globl ");
+        write_symbol_name(fn->sym, out);
+        fprintf(out, "\n");
+    }
+
+    fprintf(out, "\t.text\n");
+    write_symbol_name(fn->sym, out);
+    fprintf(out, ":\n");
+
+    // Function prologue
+    fprintf(out, "\tpushq %%rbp\n");
+    fprintf(out, "\tmovq %%rsp, %%rbp\n");
+    if (fn->stack_size)
+        fprintf(out, "\tsubq $%d, %%rsp\n", fn->stack_size);
+
+    LIST_FOREACH(instr, &fn->instrs) {
+        write_instr(instr, out);
     }
 }
 
-void emit_x86(struct ir_program *ir, FILE *file)
+static void
+write_static(symbol_t *sym, FILE *out)
 {
-    struct asm_program *program = lower_ir_program(ir);
-    asm_phase2(program);
-    for (struct asm_function *fn = program->functions; fn; fn = fn->next)
-        asm_phase3(fn);
+    if (sym->kind != SYMBOL_OBJECT || sym->init != INIT_CONSTANT)
+        return;
 
+    size_t size = type_size(sym->ty);
 
-    for (struct asm_static_variable *var = program->static_vars; var; var = var->next)
-        emit_static_variable(var, file);
-
-
-    for (struct asm_function *fn = program->functions; fn; fn = fn->next) {
-        emit_function(fn, file);
+    if (sym->linkage == LINKAGE_EXTERNAL) {
+        fprintf(out, "\t.globl ");
+        write_symbol_name(sym, out);
+        fprintf(out, "\n");
     }
 
-    // Linux/ELF requirement
-    fprintf(file, "\n    .section .note.GNU-stack,\"\",@progbits\n");
+    fprintf(out, "\t%s\n", sym->init_value == 0 ? ".bss" : ".data");
+    fprintf(out, "\t.align %zu\n", size);
+
+    write_symbol_name(sym, out);
+    fprintf(out, ":\n");
+
+    if (sym->init_value == 0)
+        fprintf(out, "\t.zero %zu\n", size);
+    else if (size == 4)
+        fprintf(out, "\t.long %ld\n", (long)sym->init_value);
+    else if (size == 8)
+        fprintf(out, "\t.quad %ld\n", (long)sym->init_value);
+}
+
+bool
+asm_emit(
+        ir_program_t *ir_program,
+        sema_result_t *sema,
+        FILE *out)
+{
+    // Phase 1
+    asm_program_t *program = lower_ir_program(ir_program);
+
+    // Phase 2
+    LIST_FOREACH(fn, &program->fns) {
+        assign_stack_slots(fn);
+    }
+
+    // Phase 3
+    LIST_FOREACH(fn, &program->fns) {
+        fixup_function(fn);
+    }
+
+    // Phase 4
+    LIST_FOREACH(sym, &sema->symbols) {
+        write_static(sym, out);
+    }
+
+    LIST_FOREACH(fn, &program->fns) {
+        write_function(fn, out);
+    }
+
+    fprintf(out, "\t.section .note.GNU-stack,\"\",@progbits\n");
+
+    return true;
 }
