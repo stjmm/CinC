@@ -114,7 +114,9 @@ compile_to_asm(const char *filename, const char *out_file)
     if (!asm_emit(ir_program, &result, out))
         return false;
 
-    return false;
+    fclose(out);
+
+    return true;
 }
 
 static char *

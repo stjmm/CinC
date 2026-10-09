@@ -627,22 +627,53 @@ bool
 is_large_imm(asm_operand_t oper)
 {
     return oper.kind == OPERAND_IMM &&
-        oper.imm > INT32_MAX;
+        (oper.imm > INT32_MAX || oper.imm < INT32_MIN);
 }
 
 static void
 fixup_mov(asm_instr_t *instr)
 {
+    asm_size size = instr->size;
     asm_operand_t src = instr->mov.src;
     asm_operand_t dst = instr->mov.dst;
+    asm_operand_t r10 = operand_reg(REG_R10);
 
-    if (is_memory_operand(src) && is_memory_operand(dst)) {
-        emit_mov(instr->size, src, operand_reg(REG_R10));
-        emit_mov(instr->size, operand_reg(REG_R10), dst);
+    if (size == ASM_LONGWORD && src.kind == OPERAND_IMM)
+        src.imm = (int32_t)src.imm;
+
+    // No memory-to-memory, or 64bit imm to memory
+    if ((is_memory_operand(src) && is_memory_operand(dst)) ||
+            is_large_imm(src)) {
+        emit_mov(size, src, r10);
+        emit_mov(size, r10, dst);
         return;
     }
 
-    LIST_APPEND(&x86.fn->instrs, instr);
+    emit_mov(size, src, dst);
+}
+
+static void
+fixup_movsx(asm_instr_t *instr)
+{
+    asm_operand_t src = instr->mov.src;
+    asm_operand_t dst = instr->mov.dst;
+    asm_operand_t r10 = operand_reg(REG_R10);
+    asm_operand_t r11 = operand_reg(REG_R11);
+
+    // Source can't be immediate
+    if (src.kind == OPERAND_IMM) {
+        emit_mov(ASM_LONGWORD, src, r10);
+        src = r10;
+    }
+
+    // Destination must be register
+    if (is_memory_operand(dst)) {
+        emit_movsx(src, r11);
+        emit_mov(ASM_QUADWORD, r11, dst);
+        return;
+    }
+
+    emit_movsx(src, dst);
 }
 
 static void
@@ -681,12 +712,16 @@ fixup_binary(asm_instr_t *instr)
 static void
 fixup_idiv(asm_instr_t *instr)
 {
-    if (instr->idiv.divisor.kind != OPERAND_IMM)
-        return;
+    asm_size size = instr->size;
+    asm_operand_t divisor = instr->idiv.divisor;
     
     // Can't idiv $imm
-    emit_mov(instr->size, instr->idiv.divisor, operand_reg(REG_R10));
-    emit_idiv(instr->size, operand_reg(REG_R10));
+    if (divisor.kind == OPERAND_IMM) {
+        emit_mov(instr->size, instr->idiv.divisor, operand_reg(REG_R10));
+        divisor = operand_reg(REG_R10);
+    }
+
+    emit_idiv(size, divisor);
 }
 
 static void
@@ -698,11 +733,13 @@ fixup_cmp(asm_instr_t *instr)
     asm_operand_t r10 = operand_reg(REG_R10);
     asm_operand_t r11 = operand_reg(REG_R11);
 
-    if (is_memory_operand(src) && is_memory_operand(dst)) {
+    if ((is_memory_operand(src) && is_memory_operand(dst)) ||
+            is_large_imm(src)) {
         emit_mov(size, src, r10);
         src = r10;
     }
 
+    // Second operand can't be immediate
     if (dst.kind == OPERAND_IMM) {
         emit_mov(size, dst, r11);
         dst = r11;
@@ -714,11 +751,10 @@ fixup_cmp(asm_instr_t *instr)
 static void
 fixup_push(asm_instr_t *instr)
 {
-    asm_size size = instr->size;
     asm_operand_t src = instr->push.src;
     asm_operand_t r10 = operand_reg(REG_R10);
 
-    if (is_memory_operand(src)) {
+    if (is_memory_operand(src) || is_large_imm(src)) {
         emit_mov(instr->size, src, operand_reg(REG_R10));
         src = r10;
     }
@@ -732,6 +768,9 @@ fixup_instr(asm_instr_t *instr)
     switch (instr->kind) {
         case ASM_INSTR_MOV:
             fixup_mov(instr);
+            break;
+        case ASM_INSTR_MOVSX:
+            fixup_movsx(instr);
             break;
         case ASM_INSTR_BINARY:
             fixup_binary(instr);
@@ -760,7 +799,8 @@ fixup_function(asm_function_t *fn)
 
     x86.fn = fn;
 
-    for (asm_instr_t *instr = old.head; instr; instr = instr->next) {
+    for (asm_instr_t *instr = old.head, *next; instr; instr = next) {
+        next = instr->next;
         fixup_instr(instr);
     }
 
@@ -784,13 +824,13 @@ static const char *cond_suffixes[] = {
 #undef X
 };
 
-static const char *unary_ops[] = {
+static const char *unary_names[] = {
 #define X(name, str) [name] = str,
     ASM_UNARY_OP_LIST
 #undef X
 };
 
-static const char *binary_ops[] = {
+static const char *binary_names[] = {
 #define X(name, str) [name] = str,
     ASM_BINARY_OP_LIST
 #undef X
@@ -801,7 +841,7 @@ reg_name(asm_reg reg, asm_size size)
 {
     switch (size) {
         case ASM_BYTE:
-            return reg_names[reg][4];
+            return reg_names[reg][3];
         case ASM_WORD:
             return reg_names[reg][2];
         case ASM_LONGWORD:
@@ -811,10 +851,19 @@ reg_name(asm_reg reg, asm_size size)
     }
 }
 
+static char
+size_suffix(asm_size size)
+{
+    return size == ASM_QUADWORD ? 'q' : 'l';
+}
+
 static void
 write_symbol_name(symbol_t *symbol, FILE *out)
 {
     fprintf(out, "%.*s", (int)symbol->name.len, symbol->name.start);
+
+    if (symbol->linkage == LINKAGE_NONE)
+        fprintf(out, ".%zu", (size_t)symbol->id);
 }
 
 static void
@@ -841,12 +890,104 @@ write_operand(asm_operand_t oper, asm_size size, FILE *out)
 }
 
 static void
+write_label(ir_label_t label, FILE *out)
+{
+    static const char kinds[] = {
+        [IR_LABEL_TEMP] = 't',
+        [IR_LABEL_CASE] = 's',
+        [IR_LABEL_CONTINUE] = 'c',
+        [IR_LABEL_BREAK] = 'b',
+        [IR_LABEL_USER] = 'u',
+    };
+
+    fprintf(out, ".L%c%u", kinds[label.kind], label.id);
+}
+
+static void
 write_instr(asm_instr_t *instr, FILE *out)
 {
+    asm_size size = instr->size;
+
     switch (instr->kind) {
         case ASM_INSTR_MOV:
+            fprintf(out, "\tmov%c ", size_suffix(size));
+            write_operand(instr->mov.src, size, out);
+            fprintf(out, ", ");
+            write_operand(instr->mov.dst, size, out);
+            break;
+        case ASM_INSTR_MOVSX:
+            fprintf(out, "\tmovslq ");
+            write_operand(instr->mov.src, ASM_LONGWORD, out);
+            fprintf(out, ", ");
+            write_operand(instr->mov.dst, ASM_QUADWORD, out);
+            break;
+        case ASM_INSTR_UNARY:
+            fprintf(out, "\t%s%c ",
+                    unary_names[instr->unary.op],
+                    size_suffix(instr->size));
+            write_operand(instr->unary.dst, size, out);
+            break;
+        case ASM_INSTR_BINARY: {
+            asm_binary_op op = instr->binary.op;
+            asm_operand_t src = instr->binary.src;
 
+            bool count_in_reg =
+                (op == ASM_BINARY_SAL || op == ASM_BINARY_SAR) &&
+                src.kind == OPERAND_REG;
+            
+            fprintf(out, "\t%s%c ", binary_names[op], size_suffix(size));
+            write_operand(src, count_in_reg ? ASM_BYTE : size, out);
+            fprintf(out, ", ");
+            write_operand(instr->binary.dst, size, out);
+            break;
+        }
+        case ASM_INSTR_CMP:
+            fprintf(out, "\tcmp%c ", size_suffix(size));
+            write_operand(instr->cmp.src, size, out);
+            fprintf(out, ", ");
+            write_operand(instr->cmp.dst, size, out);
+            break;
+        case ASM_INSTR_IDIV:
+            fprintf(out, "\tidiv%c ", size_suffix(size));
+            write_operand(instr->idiv.divisor, size, out);
+            break;
+        case ASM_INSTR_CDQ:
+            fprintf(out, size == ASM_QUADWORD ? "\tcqo" : "\tcdq");
+            break;
+        case ASM_INSTR_JMP:
+            fprintf(out, "\tjmp ");
+            write_label(instr->jmp.target, out);
+            break;
+        case ASM_INSTR_JMPCC:
+            fprintf(out, "\tj%s ", cond_suffixes[instr->jmpcc.cond]);
+            write_label(instr->jmpcc.target, out);
+            break;
+        case ASM_INSTR_SETCC:
+            fprintf(out, "\tset%s ", cond_suffixes[instr->setcc.cond]);
+            write_operand(instr->setcc.dst, size, out);
+            break;
+        case ASM_INSTR_LABEL:
+            write_label(instr->label.label, out);
+            fprintf(out, ":");
+            break;
+        case ASM_INSTR_PUSH:
+            fprintf(out, "\tpushq ");
+            write_operand(instr->push.src, size, out);
+            break;
+        case ASM_INSTR_CALL:
+            fprintf(out, "\tcall ");
+            write_symbol_name(instr->call.callee, out);
+
+            if (!instr->call.callee->defined)
+                fprintf(out, "@PLT");
+            break;
+        case ASM_INSTR_RET:
+            fprintf(out, "\tmovq %%rbp, %%rsp\n");
+            fprintf(out, "\tpopq %%rbp\n");
+            fprintf(out, "\tret");
     }
+
+    fprintf(out, "\n");
 }
 
 static void
@@ -858,18 +999,47 @@ write_function(asm_function_t *fn, FILE *out)
         fprintf(out, "\n");
     }
 
-    fprintf(out, "\t.text ");
+    fprintf(out, "\t.text\n");
     write_symbol_name(fn->sym, out);
+    fprintf(out, ":\n");
+
+    // Function prologue
+    fprintf(out, "\tpushq %%rbp\n");
+    fprintf(out, "\tmovq %%rsp, %%rbp\n");
+    if (fn->stack_size)
+        fprintf(out, "\tsubq $%d, %%rsp\n", fn->stack_size);
+
+    LIST_FOREACH(instr, &fn->instrs) {
+        write_instr(instr, out);
+    }
 }
 
 static void
 write_static(symbol_t *sym, FILE *out)
 {
+    if (sym->kind != SYMBOL_OBJECT || sym->init != INIT_CONSTANT)
+        return;
+
+    size_t size = type_size(sym->ty);
+
     if (sym->linkage == LINKAGE_EXTERNAL) {
         fprintf(out, "\t.globl ");
         write_symbol_name(sym, out);
         fprintf(out, "\n");
     }
+
+    fprintf(out, "\t%s\n", sym->init_value == 0 ? ".bss" : ".data");
+    fprintf(out, "\t.align %zu\n", size);
+
+    write_symbol_name(sym, out);
+    fprintf(out, ":\n");
+
+    if (sym->init_value == 0)
+        fprintf(out, "\t.zero %zu\n", size);
+    else if (size == 4)
+        fprintf(out, "\t.long %ld\n", (long)sym->init_value);
+    else if (size == 8)
+        fprintf(out, "\t.quad %ld\n", (long)sym->init_value);
 }
 
 bool
@@ -893,10 +1063,14 @@ asm_emit(
 
     // Phase 4
     LIST_FOREACH(sym, &sema->symbols) {
-        write_function(sym, out);
+        write_static(sym, out);
     }
 
     LIST_FOREACH(fn, &program->fns) {
         write_function(fn, out);
     }
+
+    fprintf(out, "\t.section .note.GNU-stack,\"\",@progbits\n");
+
+    return true;
 }

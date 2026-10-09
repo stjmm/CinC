@@ -3,7 +3,7 @@
 VERBOSE=false
 CHAPTER=""
 
-COMPILER=gcc
+COMPILER=build/cinc
 PASS=0
 FAIL=0
 

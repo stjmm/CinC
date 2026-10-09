@@ -10,8 +10,7 @@ DEP=$(OBJ:.o=.d)
 
 all: debug
 
-debug: CFLAGS += -g -fsanitize=address,undefined
-debug: LDFLAGS += -fsanitize=address,undefined
+debug: CFLAGS += -g
 debug: $(EXE)
 
 release: CFLAGS += -O3 -DNDEBUG
