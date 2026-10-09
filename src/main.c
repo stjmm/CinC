@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "sema.h"
 #include "ir.h"
+#include "x86.h"
 #include "base/memory.h"
 #include "base/vector.h"
 
@@ -107,6 +108,11 @@ compile_to_asm(const char *filename, const char *out_file)
         return false;
 
     ir_program_t *ir_program = ir_build(&result);
+
+    FILE *out = fopen(out_file, "w+");
+
+    if (!asm_emit(ir_program, &result, out))
+        return false;
 
     return false;
 }

@@ -138,7 +138,7 @@ struct ir_function_t {
 
 typedef struct {
     LIST(ir_function_t) fns;
-
+    size_t pseudo_count;
     const sema_result_t *sema;
 } ir_program_t;
 

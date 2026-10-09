@@ -670,5 +670,6 @@ ir_build(const sema_result_t *sema)
             emit_function(decl);
     }
 
+    program->pseudo_count = ir.next_pseudo_id;
     return program;
 }
