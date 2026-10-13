@@ -53,6 +53,8 @@
     X(TOKEN_IDENTIFIER)           \
     X(TOKEN_INT_CONSTANT)         \
     X(TOKEN_LONG_CONSTANT)        \
+    X(TOKEN_UINT_CONSTANT)        \
+    X(TOKEN_ULONG_CONSTANT)       \
     /* Keywords */                \
     X(TOKEN_INT)                  \
     X(TOKEN_LONG)                 \
@@ -73,6 +75,8 @@
     X(TOKEN_CASE)                 \
     X(TOKEN_DEFAULT)              \
     X(TOKEN_GOTO)                 \
+    X(TOKEN_SIGNED)               \
+    X(TOKEN_UNSIGNED)             \
     /* Misc */                    \
     X(TOKEN_ERROR)                \
     X(TOKEN_EOF)                  

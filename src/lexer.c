@@ -36,6 +36,8 @@ static const keyword_t KEYWORDS[] = {
     {"switch",   6, TOKEN_SWITCH},
     {"void",     4, TOKEN_VOID},
     {"while",    5, TOKEN_WHILE},
+    {"signed",   6, TOKEN_SIGNED},
+    {"unsigned", 8, TOKEN_UNSIGNED}
 };
 
 static lexer_t lexer;
@@ -205,12 +207,35 @@ number(void)
 
     token_kind kind = TOKEN_INT_CONSTANT;
 
-    if (peek() == 'l' || peek() == 'L') {
-        advance();
-        kind = TOKEN_LONG_CONSTANT;
+    switch (peek()) {
+        case 'u':
+        case 'U':
+            advance();
+            if (peek() == 'l' || peek() == 'L') {
+                advance();
+                kind = TOKEN_ULONG_CONSTANT;
+                break;
+            }
+            kind = TOKEN_UINT_CONSTANT;
+            break;
+        case 'l':
+        case 'L':
+            advance();
+            if (peek() == 'u' || peek() == 'U') {
+                advance();
+                kind = TOKEN_ULONG_CONSTANT;
+                break;
+            }
+            kind = TOKEN_LONG_CONSTANT;
+            break;
     }
 
-    // 123abc, 0lL, 1.5 (no floating constants yet)
+    // if (peek() == 'l' || peek() == 'L') {
+    //     advance();
+    //     kind = TOKEN_LONG_CONSTANT;
+    // }
+
+    // 123abc, 0lL, 1.5
     if (is_alpha(peek()) || is_digit(peek()) || peek() == '.') {
         while (is_alpha(peek()) || is_digit(peek()) || peek() == '.')
             advance();
