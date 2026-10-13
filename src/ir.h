@@ -60,6 +60,8 @@ typedef enum {
     IR_BINARY_GE,
 } ir_binary_op;
 
+// TODO: Add ir_cast_op, and add to cast struct
+
 typedef enum {
     IR_INSTR_RETURN,
     IR_INSTR_UNARY,
